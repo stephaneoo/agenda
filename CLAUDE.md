@@ -16,6 +16,10 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
   `deploy-*` tag. That one needs git history, which the flake check sandbox doesn't have.
 - Backward-incompatible migration operations must carry `# contract-of: <app>.<expand_migration>`,
   naming a migration already present at the last deploy.
+- `nix run .#travel-matrix -- --origin 26220 --minutes 30`: regenerate `data/travel-times.json`
+  and `data/communes.geojson` (OSRM on Geofabrik extracts, IGN ADMIN EXPRESS COG, La Poste
+  postcodes). Needs ~8 GB RAM; caches downloads in `~/.cache/agenda-travel-matrix`. Then
+  `python manage.py load_geo --matrix data/travel-times.json --communes data/communes.geojson`.
 - `uv lock` (inside the dev shell): update `uv.lock` after editing `pyproject.toml`.
 
 On the Mac laptop without Nix, run commands on the dev VM: `tools/dev run '<command>'`, and bring

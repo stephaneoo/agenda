@@ -101,6 +101,7 @@
               check-migrations
             '';
           };
+          travelMatrix = import ./nix/travel-matrix.nix { inherit lib pkgs venv geoEnv; };
         in
         {
           inherit
@@ -112,6 +113,7 @@
             pytestShim
             checkMigrations
             checkAll
+            travelMatrix
             ;
         }
       );
@@ -130,6 +132,10 @@
         check = {
           type = "app";
           program = "${perSystem.${system}.checkAll}/bin/check";
+        };
+        travel-matrix = {
+          type = "app";
+          program = "${perSystem.${system}.travelMatrix}/bin/travel-matrix";
         };
       });
 
