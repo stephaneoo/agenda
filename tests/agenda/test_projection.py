@@ -6,8 +6,8 @@ from django.forms.models import model_to_dict
 
 from agenda.categories import SLUGS
 from agenda.models import CanonicalWriteError, Event, Occurrence, projection_writer
-from agenda.projection import rebuild_all
-from claims.keys import occurrence_key
+from agenda.projection import project_event, rebuild_all
+from claims.keys import event_key_of, occurrence_key
 from claims.models import Claim
 from claims.services import NewClaim, delete_claim, write_claims
 from tests.helpers import T0, dates_value, import_event, location, moderate
@@ -140,7 +140,11 @@ def test_rescheduled_without_previous_start_stays_scheduled() -> None:
 
 
 def test_invalid_values_fall_back() -> None:
-    import_event(KEY, category="nope", loc=location(lat=44.36, lon=5.14))
+    import_event(KEY, loc=location(lat=44.36, lon=5.14))
+    with pytest.raises(ValueError):
+        import_event(KEY, category="nope")
+    Claim.objects.filter(field="category").update(value="nope")  # a claim from before validation
+    rebuild_all()
     e = Event.objects.get()
     assert e.category == "autre"
     assert e.location["lat"] == 44.36
@@ -228,18 +232,27 @@ def random_claim(rng: random.Random, keys: list[str], days: list[date], times: l
 
 def test_rebuild_equals_incremental() -> None:
     rng = random.Random(20261025)
-    keys = ["datatourisme:a", "datatourisme:b", "datatourisme:c"]
+    keys = ["x:1", "x:12", "src:a/b", "src:a"]
     days = [date(2026, 10, 20), date(2026, 11, 5), date(2026, 11, 6), date(2026, 12, 24)]
     times = [T0, T0, T1, T0 + timedelta(days=30)]
     for case in range(200):
         for _ in range(rng.randint(3, 12)):
             claim = random_claim(rng, keys, days, times)
-            existing = list(Claim.objects.filter(target_key__startswith="datatourisme:"))
+            existing = list(Claim.objects.all())
+            key = event_key_of(claim.target_type, claim.target_key)
             if existing and rng.random() < 0.15:
                 c = rng.choice(existing)
                 delete_claim(c.target_type, c.target_key, c.field, c.source_id)
-            else:
-                write_claims(claim.target_key.split("/")[0], [claim])
+                continue
+            try:
+                write_claims(key, [claim])
+            except ValueError:
+                # Refused now, but such rows may predate validation: the projection must cope.
+                Claim.objects.update_or_create(
+                    target_type=claim.target_type, target_key=claim.target_key, field=claim.field,
+                    source_id=claim.source, defaults={"value": claim.value, "seen_at": claim.seen_at, "event_key": key},
+                )
+                project_event(key)
         incremental = snapshot()
         with projection_writer():
             Event.objects.all().delete()

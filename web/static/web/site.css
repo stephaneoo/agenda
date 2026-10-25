@@ -35,6 +35,7 @@ footer.site { color: var(--muted); font-size: .85rem; border-top: 1px solid var(
   .cat { grid-column: auto; order: 0; }
 }
 .empty { color: var(--muted); padding: 1rem 0; }
+.notice { color: var(--warn); font-weight: 600; }
 .over { color: var(--warn); font-weight: 600; }
 .occurrence dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; }
 .occurrence dt { color: var(--muted); }

@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from datetime import date
 
-from django.http import HttpRequest, HttpResponse, HttpResponsePermanentRedirect, JsonResponse
+from typing import Any
+
+from django.http import HttpRequest, HttpResponse, HttpResponsePermanentRedirect
 from ninja import NinjaAPI, Query
 from ninja.errors import HttpError, ValidationError
 
@@ -14,11 +16,27 @@ from agenda.categories import SLUGS
 from agenda.timeutil import format_local
 from agenda_site.site import base_url
 from api import schemas
+from api.problems import problem
 from geo.services import covered_communes, matrix_payload
 
-VERSION = "1.0.0"  # bump on every change to the API (spec, Versioning)
+VERSION = "1.1.0"  # bump on every change to the API (spec, Versioning); tools.check_openapi_version checks it
+DATE = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 
-api = NinjaAPI(
+
+class AgendaAPI(NinjaAPI):
+    def get_openapi_schema(self, *args: Any, **kwargs: Any) -> Any:
+        """Error responses are application/problem+json, not application/json."""
+        schema = super().get_openapi_schema(*args, **kwargs)
+        for operations in schema["paths"].values():
+            for operation in operations.values():
+                for code, response in operation.get("responses", {}).items():
+                    content = response.get("content", {})
+                    if int(code) >= 400 and "application/json" in content:
+                        response["content"] = {"application/problem+json": content["application/json"]}
+        return schema
+
+
+api = AgendaAPI(
     title="Agenda — API publique",
     version=VERSION,
     description="Read-only API of the events agenda around Nyons. Data: Licence Ouverte 2.0; "
@@ -27,14 +45,16 @@ api = NinjaAPI(
     urls_namespace="api-v1",
 )
 
-TITLES = {404: "Not Found", 410: "Gone", 422: "Unprocessable Content"}
-ERRORS = {404: schemas.Problem, 410: schemas.Problem, 422: schemas.Problem}
+ERRORS = {404: schemas.Problem, 410: schemas.Problem}
 
 
-def problem(status: int, detail: str) -> JsonResponse:
-    body = {"type": "about:blank", "title": TITLES.get(status, "Error"), "status": status, "detail": detail}
-    return JsonResponse(body, status=status, content_type="application/problem+json",
-                        json_dumps_params={"ensure_ascii": False})
+def _date(value: str | None, name: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise read.InvalidQuery(f"{name} is not a date (YYYY-MM-DD)") from None
 
 
 @api.exception_handler(read.InvalidQuery)
@@ -64,15 +84,22 @@ def _http_error(request: HttpRequest, exc: HttpError) -> HttpResponse:
 @api.get("/occurrences", response={200: schemas.OccurrencePage, 422: schemas.Problem}, summary="Search occurrences")
 def occurrences(
     request: HttpRequest,
-    commune: str | None = Query(None, description="INSEE code of the origin; required with within"),
-    within: int | None = Query(None, description="Minutes by car from commune, 0 to 60"),
-    date_from: date | None = Query(None, alias="from", description="Local date, inclusive; default today"),
-    date_to: date | None = Query(None, alias="to", description="Local date, inclusive; default from + 30 days"),
-    category: list[str] = Query([], description="Category slugs, repeated"),
+    commune: str | None = Query(None, description="INSEE code of the origin, in the covered area. Required with "
+                                "`within`; without `within`, only occurrences in that commune itself are returned."),
+    within: int | None = Query(None, ge=0, le=read.MAX_WITHIN,
+                               description="Minutes by car from `commune`, 0 to 60. 0 keeps the origin commune only."),
+    date_from: str | None = Query(None, alias="from", pattern=DATE, format="date",
+                                  description="Local date YYYY-MM-DD, inclusive; default today in Europe/Paris"),
+    date_to: str | None = Query(None, alias="to", pattern=DATE, format="date",
+                                description="Local date YYYY-MM-DD, inclusive; default from + 30 days; "
+                                f"at most {read.MAX_SPAN_DAYS} days after from"),
+    category: list[schemas.CategorySlug] = Query([], description="Category slugs, repeated"),
     cursor: str | None = Query(None, description="The `next` of the previous page"),
-    limit: int = Query(read.DEFAULT_LIMIT, description=f"1 to {read.MAX_LIMIT}"),
+    limit: int = Query(read.DEFAULT_LIMIT, ge=1, le=read.MAX_LIMIT, description=f"1 to {read.MAX_LIMIT}"),
 ):
-    page = read.search_occurrences(commune, within, date_from, date_to, category, cursor, limit)
+    page = read.search_occurrences(
+        commune, within, _date(date_from, "from"), _date(date_to, "to"), list(category), cursor, limit
+    )
     root = base_url(request)
     return {"items": [read.occurrence_dict(o, root) for o in page.items], "next": page.next}
 
@@ -113,7 +140,7 @@ def categories(request: HttpRequest):
     return [{"slug": slug, "label": label} for slug, label in SLUGS.items()]
 
 
-@api.get("/status", response=schemas.Status, summary="Last sync of each source")
+@api.get("/status", response=schemas.SyncStatus, summary="Last sync of each source")
 def status(request: HttpRequest):
     s = read.sync_status()
     fmt = lambda d: format_local(d) if d else None  # noqa: E731

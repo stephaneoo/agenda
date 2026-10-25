@@ -22,6 +22,7 @@
   <button type="submit">Filtrer</button>
 </form>
 
+{% if truncated %}<p class="notice">Liste tronquée : seuls les {{ count }} premiers événements sont affichés. Réduisez le rayon, les dates ou les catégories.</p>{% endif %}
 {% if not count %}<p class="empty">Aucun événement pour ces critères.</p>{% endif %}
 
 {% if ongoing %}

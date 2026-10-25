@@ -3,8 +3,16 @@ come from agenda.read, which is the only thing the endpoints call."""
 
 from __future__ import annotations
 
+from typing import Literal
+
 from ninja import Schema
 from pydantic import Field
+
+from agenda.categories import SLUGS
+
+# Adding a value here is a non-breaking change (spec, Versioning); adding a status is breaking.
+CategorySlug = Literal[tuple(SLUGS)]  # type: ignore[valid-type]
+Status = Literal["scheduled", "rescheduled", "postponed", "cancelled"]
 
 
 class Location(Schema):
@@ -44,9 +52,9 @@ class Occurrence(Schema):
     start: str = Field(description="Local date-time (RFC 3339, Europe/Paris offset), or a local date YYYY-MM-DD")
     end: str | None = Field(description="Same format as start; null means no end to display")
     timezone: str = Field(description='Always "Europe/Paris"')
-    status: str = Field(description="scheduled | rescheduled | postponed | cancelled")
+    status: Status
     previous_start: str | None = Field(description="Set when status is rescheduled")
-    category: str
+    category: CategorySlug
     location: Location
     organizer: Organizer | None
     offers: Offers | None
@@ -63,7 +71,7 @@ class Event(Schema):
     id: str
     name: str
     description: str | None
-    category: str
+    category: CategorySlug
     location: Location
     organizer: Organizer | None
     offers: Offers | None
@@ -86,7 +94,7 @@ class TravelTimes(Schema):
 
 
 class Category(Schema):
-    slug: str
+    slug: CategorySlug
     label: str
 
 
@@ -95,7 +103,7 @@ class SourceStatus(Schema):
     last_success: str | None
 
 
-class Status(Schema):
+class SyncStatus(Schema):
     last_sync: str | None
     sources: list[SourceStatus]
 

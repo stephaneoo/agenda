@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 from django.conf import settings
 from django.db import DatabaseError, connection
@@ -17,7 +17,7 @@ from django.views.decorators.http import require_safe
 from agenda import read
 from agenda.categories import SLUGS
 from agenda.models import Occurrence
-from agenda.timeutil import parse, today
+from agenda.timeutil import PARIS, parse, today
 from web.jsonld import occurrence_jsonld
 
 RADII = [0, 10, 20, 30]
@@ -25,7 +25,8 @@ DEFAULT_RADIUS = 30
 PERIODS = {"aujourdhui": "Aujourd'hui", "week-end": "Ce week-end", "7j": "7 jours", "30j": "30 jours"}
 DEFAULT_PERIOD = "7j"
 STATUS_LABELS = {"rescheduled": "Reprogrammé", "postponed": "Reporté", "cancelled": "Annulé"}
-MAX_PAGES = 5  # 1000 occurrences: more than the area has in 30 days
+PAGE_SIZE = read.MAX_LIMIT
+MAX_PAGES = 5  # 1000 occurrences: more than the area has in 30 days; beyond, the page says so
 
 
 def now() -> datetime:
@@ -67,9 +68,23 @@ def _row(occ: Occurrence) -> Row:
     )
 
 
+def _wall(value: str, is_end: bool) -> datetime:
+    """Local wall-clock time, naive. A date starts at 00:00; as an end, it runs to 24:00."""
+    v = parse(value)
+    if isinstance(v, datetime):
+        return v.astimezone(PARIS).replace(tzinfo=None)
+    return datetime.combine(v, time()) + (timedelta(days=1) if is_end else timedelta())
+
+
 def _spanning(occ: Occurrence) -> bool:
-    """More than a day long: shown once under "En cours", not under each day."""
-    return occ.end_utc_inclusive - occ.start_utc > timedelta(hours=24)
+    """More than 24 h on the wall clock: shown once under "En cours", not under each day.
+    Measured in local time, so a whole day on a DST change (23 or 25 h) is still one day."""
+    start = _wall(occ.start, False)
+    if occ.end:
+        end = _wall(occ.end, True)
+    else:
+        end = _wall(occ.start, True) if len(occ.start) == 10 else start
+    return end - start > timedelta(hours=24)
 
 
 @require_safe
@@ -89,13 +104,15 @@ def agenda(request: HttpRequest) -> HttpResponse:
     date_from, date_to = period_range(period, today())
 
     items: list[Occurrence] = []
+    truncated = False
     if commune in known:
         cursor = None
         for _ in range(MAX_PAGES):
-            page = read.search_occurrences(commune, radius, date_from, date_to, categories, cursor, read.MAX_LIMIT)
+            page = read.search_occurrences(commune, radius, date_from, date_to, categories, cursor, PAGE_SIZE)
             items += page.items
             if not (cursor := page.next):
                 break
+        truncated = cursor is not None
 
     ongoing, days = [], {}
     for occ in items:
@@ -109,6 +126,7 @@ def agenda(request: HttpRequest) -> HttpResponse:
         "communes": communes, "commune": commune, "radii": RADII, "radius": radius,
         "periods": PERIODS, "period": period, "categories": SLUGS, "selected_categories": categories,
         "ongoing": ongoing, "days": [days[d] for d in sorted(days)], "count": len(items),
+        "truncated": truncated,
     })
 
 
@@ -147,8 +165,9 @@ def about(request: HttpRequest) -> HttpResponse:
 
 
 def _migrations_applied() -> bool:
-    executor = MigrationExecutor(connection)
-    return not executor.migration_plan(executor.loader.graph.leaf_nodes())
+    """Every migration on disk is recorded as applied (not just the leaves: a gap counts)."""
+    loader = MigrationExecutor(connection).loader
+    return set(loader.graph.nodes) <= set(loader.applied_migrations)
 
 
 @never_cache

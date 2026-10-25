@@ -18,9 +18,31 @@ pytestmark = pytest.mark.usefixtures("small_geo")
 NOV = "from=2026-11-01&to=2026-11-30"
 
 
+class CheckingClient(Client):
+    """Every occurrence object the API returns must conform (schema plus the extra rules)."""
+
+    def get(self, *args, **kwargs):
+        response = super().get(*args, **kwargs)
+        if response.status_code == 200 and response["Content-Type"].startswith("application/json"):
+            for obj in _occurrence_objects(args[0] if args else kwargs["path"], json.loads(response.content)):
+                assert occurrence_problems(obj) == [], obj
+        return response
+
+
+def _occurrence_objects(url: str, body):
+    path = url.split("?")[0]
+    if path == "/api/v1/occurrences":
+        return body["items"]
+    if path.startswith("/api/v1/occurrences/"):
+        return [body]
+    if path.startswith("/api/v1/events/"):
+        return body["occurrences"]
+    return []
+
+
 @pytest.fixture
 def client() -> Client:
-    return Client()
+    return CheckingClient()
 
 
 @pytest.fixture
@@ -87,6 +109,9 @@ def test_pagination_and_filters(client: Client, events: None) -> None:
     "limit=201",
     "within=trente&commune=26220",
     "from=2026-13-01",
+    "from=2026-11-05T00:00:00",
+    "to=20261105",
+    "within=1.5&commune=26220",
     "category=inconnue",
     "cursor=nope",
 ])
@@ -161,7 +186,7 @@ def test_communes_travel_times_categories_status_shapes(client: Client, events: 
 def test_openapi_served_at_v1(client: Client) -> None:
     response, spec = get(client, "/api/v1/openapi.json")
     assert response.status_code == 200
-    assert spec["openapi"].startswith("3.1") and spec["info"]["version"] == "1.0.0"
+    assert spec["openapi"].startswith("3.1") and spec["info"]["version"] == "1.1.0"
     assert {"/api/v1/occurrences", "/api/v1/occurrences/{id}", "/api/v1/events/{id}", "/api/v1/communes",
             "/api/v1/travel-times", "/api/v1/categories", "/api/v1/status"} <= set(spec["paths"])
     assert check_openapi()
@@ -179,3 +204,65 @@ def test_ui_uses_no_private_endpoints() -> None:
     api_routes = [p for p in _paths(get_resolver()) if p.lstrip("^").startswith("api")]
     assert api_routes
     assert all(p.lstrip("^").startswith("api/v1/") for p in api_routes), api_routes
+
+
+# --- Review fixes ------------------------------------------------------------------------
+
+def test_unsafe_urls_never_reach_the_api(client: Client) -> None:
+    import_event("datatourisme:x", url="javascript:alert(1)",
+                 organizer={"name": "C", "url": "JaVaScRiPt:alert(1)"},
+                 offers={"is_free": True, "price": None, "url": "data:text/html,x"})
+    _, body = get(client, f"/api/v1/occurrences?{NOV}")
+    (item,) = body["items"]
+    assert item["organizer"]["url"] is None and item["offers"]["url"] is None and item["sources"][0]["url"] is None
+
+
+def test_moved_chain_single_redirect_to_final(client: Client) -> None:
+    key = "datatourisme:chain"
+    days = [date(2026, 11, d) for d in (5, 12, 19)]
+    import_event(key, dates=[dates_value(d, "10:00") for d in days])
+    a, b, c = (occurrence_key(key, d) for d in days)
+    moderate(key, "occurrence", a, "moved_to", b)
+    moderate(key, "occurrence", b, "moved_to", c)
+    ids = {k: Occurrence.objects.get(key=k).id for k in (a, b, c)}
+    response = client.get(f"/api/v1/occurrences/{ids[a]}")
+    assert (response.status_code, response["Location"]) == (301, f"/api/v1/occurrences/{ids[c]}")
+    moderate(key, "occurrence", b, "moved_to", a)  # a cycle: both stay where they are
+    assert client.get(f"/api/v1/occurrences/{ids[a]}").status_code == 200
+    assert client.get(f"/api/v1/occurrences/{ids[b]}").status_code == 200
+    moderate(key, "occurrence", b, "moved_to", c)
+    moderate(key, "occurrence", c, "visibility", {"value": "hidden", "reason": "x"})
+    assert client.get(f"/api/v1/occurrences/{ids[a]}").status_code == 410
+
+
+@pytest.mark.parametrize("method, url, status", [
+    ("get", "/api/v1/occurrences/", 404),
+    ("get", "/api/v1/nope", 404),
+    ("get", "/api/v1/", 404),
+    ("post", "/api/v1/occurrences", 405),
+    ("delete", "/api/v1/status", 405),
+])
+def test_every_api_error_is_problem_json(client: Client, method: str, url: str, status: int) -> None:
+    response = getattr(client, method)(url)
+    assert response.status_code == status
+    assert response["Content-Type"] == "application/problem+json"
+    body = json.loads(response.content)
+    assert body["status"] == status and body["title"] and body["detail"]
+
+
+def test_openapi_documents_errors_enums_and_ranges(client: Client) -> None:
+    _, spec = get(client, "/api/v1/openapi.json")
+    assert spec["info"]["version"] == "1.1.0"
+    op = spec["paths"]["/api/v1/occurrences"]["get"]
+    assert list(op["responses"]["422"]["content"]) == ["application/problem+json"]
+    one_op = spec["paths"]["/api/v1/occurrences/{id}"]["get"]
+    assert list(one_op["responses"]["404"]["content"]) == ["application/problem+json"]
+    params = {p["name"]: p for p in op["parameters"]}
+    within = json.dumps(params["within"]["schema"])
+    assert '"minimum": 0' in within and '"maximum": 60' in within
+    limit = params["limit"]["schema"]
+    assert (limit["minimum"], limit["maximum"]) == (1, 200)
+    assert "only" in params["commune"]["description"]
+    assert params["from"]["schema"].get("pattern") or "pattern" in json.dumps(params["from"]["schema"])
+    schemas = json.dumps(spec["components"]["schemas"])
+    assert '"rescheduled"' in schemas and '"sport-balade"' in schemas

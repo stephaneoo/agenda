@@ -12,6 +12,10 @@ from contextvars import ContextVar
 from typing import Any
 
 from django.db import models
+from django.db.models.signals import pre_delete, pre_save
+
+from agenda.fields import STATUSES as _STATUSES
+from agenda.fields import VISIBILITIES as _VISIBILITIES
 
 _writing: ContextVar[bool] = ContextVar("projection_writing", default=False)
 
@@ -67,8 +71,8 @@ class CanonicalModel(models.Model):
         return super().delete(*args, **kwargs)
 
 
-VISIBILITIES = ["published", "pending", "hidden"]
-STATUSES = ["scheduled", "rescheduled", "postponed", "cancelled"]
+VISIBILITIES = list(_VISIBILITIES)
+STATUSES = list(_STATUSES)
 
 
 class Event(CanonicalModel):
@@ -95,6 +99,8 @@ class Event(CanonicalModel):
     class Meta:
         ordering = ["key"]
         verbose_name = "événement"
+        # Related-object access and cascades go through the guarded manager too.
+        base_manager_name = "objects"
 
     def __str__(self) -> str:
         return self.name or self.key
@@ -122,8 +128,11 @@ class Occurrence(CanonicalModel):
     class Meta:
         ordering = ["start_utc", "id"]
         verbose_name = "occurrence"
+        base_manager_name = "objects"
         indexes = [
             models.Index(fields=["start_utc", "id"], name="occurrence_shown_start", condition=models.Q(shown=True)),
+            # The list's range test starts here, so its cost doesn't grow with past occurrences.
+            models.Index(fields=["end_utc_inclusive"], name="occurrence_shown_end", condition=models.Q(shown=True)),
             models.Index(fields=["event", "local_date"], name="occurrence_event_date"),
         ]
 
@@ -132,3 +141,13 @@ class Occurrence(CanonicalModel):
 
     def get_absolute_url(self) -> str:
         return f"/evenements/{self.event.slug}-{self.local_date.isoformat()}/"
+
+
+def _signal_guard(sender: type, **kwargs: Any) -> None:
+    """save_base() and loaddata (raw saves) skip save(); the signals still fire."""
+    _guard()
+
+
+for _model in (Event, Occurrence):
+    pre_save.connect(_signal_guard, sender=_model, dispatch_uid=f"canonical-pre-save-{_model.__name__}")
+    pre_delete.connect(_signal_guard, sender=_model, dispatch_uid=f"canonical-pre-delete-{_model.__name__}")

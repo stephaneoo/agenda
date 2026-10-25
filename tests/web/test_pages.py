@@ -184,3 +184,57 @@ def test_rescheduled_page_shows_previous_date(client: Client) -> None:
     html = page(client, Occurrence.objects.get(pk=occ.pk)).content.decode()
     assert "Reprogrammé (initialement prévu le 31 octobre 2026 à 21:00)" in html
     assert "samedi 7 novembre 2026, 21:00 – dimanche 8 novembre 2026, 01:00" in html
+
+
+# --- Review fixes ------------------------------------------------------------------------
+
+def test_unsafe_urls_are_not_links(client: Client) -> None:
+    occ = event("datatourisme:x", TODAY, url="javascript:alert(1)",
+                organizer={"name": "Comité", "url": "JaVaScRiPt:alert(1)"},
+                offers={"is_free": False, "price": "5 €", "url": "//evil.example/"})
+    html = page(client, occ).content.decode()
+    assert "javascript:" not in html.lower() and "evil.example" not in html
+    data = page_jsonld(html)
+    assert "url" not in data.get("organizer", {}) and "offers" not in data
+
+
+def test_moved_chain_page_redirects_to_final(client: Client) -> None:
+    key = "datatourisme:chain"
+    days = [TODAY + timedelta(days=d) for d in (1, 8, 15)]
+    import_event(key, dates=[dates_value(d, "10:00") for d in days])
+    a, b, c = (Occurrence.objects.get(key=occurrence_key(key, d)) for d in days)
+    moderate(key, "occurrence", a.key, "moved_to", b.key)
+    moderate(key, "occurrence", b.key, "moved_to", c.key)
+    response = client.get(a.get_absolute_url())
+    assert (response.status_code, response["Location"]) == (301, c.get_absolute_url())
+    moderate(key, "occurrence", c.key, "visibility", {"value": "hidden", "reason": "x"})
+    assert client.get(a.get_absolute_url()).status_code == 410
+
+
+@pytest.mark.parametrize("day", [date(2026, 10, 25), date(2027, 3, 28)])
+def test_dst_day_rendering_and_en_cours(client: Client, monkeypatch: pytest.MonkeyPatch, day: date) -> None:
+    monkeypatch.setattr(views, "today", lambda: day)
+    import_event("datatourisme:day", name="Journée entière", dates=[dates_value(day)])  # 23 or 25 hours
+    import_event("datatourisme:night", name="Nuit blanche", dates=[dates_value(day, "02:30")])
+    eve = day - timedelta(days=1)
+    # 06:00 to 06:30 the next day: 24 h 30 on the wall clock, 23 h 30 or 25 h 30 in UTC.
+    import_event("datatourisme:long", name="Longue veille", dates=[dates_value(eve, "06:00", day, "06:30")])
+    html = client.get("/").content.decode()
+    heading = "dimanche 25 octobre" if day.month == 10 else "dimanche 28 mars"
+    en_cours, day_heading = html.index("En cours"), html.index(heading)
+    assert en_cours < html.index("Longue veille") < day_heading < html.index("Journée entière")
+    assert html.index("Nuit blanche") > day_heading
+    expected = "02:30" if day.month == 10 else "03:00"  # 02:30 doesn't exist in March
+    assert f'<span class="time">{expected}</span>' in html
+    page(client, Occurrence.objects.get(key=occurrence_key("datatourisme:night", day)))
+
+
+def test_truncated_list_says_so(client: Client, monkeypatch: pytest.MonkeyPatch) -> None:
+    for i in range(3):
+        event(f"datatourisme:{i}", TODAY, f"1{i}:00")
+    assert "tronquée" not in client.get("/").content.decode()
+    monkeypatch.setattr(views, "PAGE_SIZE", 1)
+    monkeypatch.setattr(views, "MAX_PAGES", 2)
+    html = client.get("/").content.decode()
+    assert len(titles(html)) == 2
+    assert "Liste tronquée" in html

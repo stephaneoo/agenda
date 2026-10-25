@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from django.db.models import Q
+from django.db.models import DateTimeField, ExpressionWrapper, F, Q, Value
 
 from agenda.categories import SLUGS
 from agenda.models import Event, Occurrence
@@ -121,7 +121,11 @@ def matching(query: Query):
         qs = qs.filter(event__commune__in=query.communes)
     if query.categories:
         qs = qs.filter(event__category__in=query.categories)
-    return qs.select_related("event").order_by("start_utc", "id")
+    # Sorting on an expression (start_utc + 0) keeps the planner off the (start_utc, id)
+    # index, which would walk every past occurrence; the end_utc_inclusive index then picks
+    # the rows still running, so the cost doesn't grow with history. Same order.
+    sort_start = ExpressionWrapper(F("start_utc") + Value(timedelta(0)), output_field=DateTimeField())
+    return qs.select_related("event").order_by(sort_start, "id")
 
 
 def search_occurrences(
@@ -152,7 +156,10 @@ def get_occurrence(id: str) -> Occurrence | Gone | MovedTo:
     if occ is None:
         raise NotFound(id)
     if occ.moved_to_id:
-        return MovedTo(occ.moved_to_id)
+        # moved_to_id is already the final target (the projection follows chains); that
+        # target's own state decides: a redirect to it, or 410 when it isn't published.
+        target_shown = Occurrence.objects.filter(id=occ.moved_to_id).values_list("shown", flat=True).first()
+        return MovedTo(occ.moved_to_id) if target_shown else Gone(id)
     return occ if occ.shown else Gone(id)
 
 

@@ -21,11 +21,20 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
   and `data/communes.geojson` (OSRM on Geofabrik extracts, IGN ADMIN EXPRESS COG, La Poste
   postcodes). Needs ~8 GB RAM; caches downloads in `~/.cache/agenda-travel-matrix`. Then
   `python manage.py load_geo --matrix data/travel-times.json --communes data/communes.geojson`.
-- `python -m tools.check_openapi --write`: regenerate `api/openapi.json` after changing the API
-  (and bump `api.v1.VERSION`). The flake check fails while the committed file differs.
+- `python -m tools.check_openapi --write`: regenerate `api/openapi.json` after changing the API,
+  and bump `api.v1.VERSION`. The flake check fails while the committed file differs, and
+  `nix run .#check` fails when the spec changed since the last `deploy-*` tag without a new
+  `info.version` (`tools/check_openapi_version.py`).
 - `python manage.py rebuild_projection`: rebuild the canonical `Event`/`Occurrence` tables from
-  the claims. Write claims only through `claims.services.write_claims` / `delete_claim`; the
-  canonical models refuse writes outside `agenda.models.projection_writer()`.
+  the claims, one event per transaction. Write claims only through
+  `claims.services.write_claims` / `delete_claim`; the canonical models refuse writes outside
+  `agenda.models.projection_writer()`. Run it after **any change to the `Source` table**
+  (priority, label, licence, external): those don't reproject by themselves.
+- **Never wrap many `write_claims` calls in one outer transaction** (e.g. a whole sync run):
+  each call takes its event's lock until the transaction ends. One event, one transaction.
+- Accepted v1 edge case: the cutoff for a `listed: false` claim (a drop after the occurrence
+  ended doesn't withdraw it) comes from the occurrence's *current* `dates`. Moving its time
+  later on the same day can turn an earlier drop into a withdrawal.
 - `uv lock` (inside the dev shell): update `uv.lock` after editing `pyproject.toml`. uv only
   resolves releases at least 7 days old (`exclude-newer` in `pyproject.toml`).
 

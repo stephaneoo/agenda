@@ -94,6 +94,8 @@
               export AGENDA_DEV=1
               cd "$(git rev-parse --show-toplevel)"
               postgis-fixture python -m tools.check_migrations "$@"
+              # The API spec changed since the last deploy only with a new info.version.
+              python -m tools.check_openapi_version "$@"
             '';
           };
           # Everything the deploy runs: the sandboxed flake checks, then the git-aware ones.

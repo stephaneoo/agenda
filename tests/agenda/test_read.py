@@ -207,3 +207,37 @@ def test_sync_status() -> None:
         "last_sync": when,
         "sources": [{"name": "DATAtourisme", "last_success": when, "last_run": when, "last_outcome": "ok"}],
     }
+
+
+def _chain(final_visible: bool = True) -> tuple[str, str, str]:
+    """A -> B -> C, moved by a moderator; C hidden unless final_visible."""
+    key = "datatourisme:chain"
+    days = [date(2026, 11, d) for d in (5, 12, 19)]
+    import_event(key, dates=[dates_value(d, "10:00") for d in days])
+    a, b, c = (occurrence_key(key, d) for d in days)
+    moderate(key, "occurrence", a, "moved_to", b)
+    moderate(key, "occurrence", b, "moved_to", c)
+    if not final_visible:
+        moderate(key, "occurrence", c, "visibility", {"value": "hidden", "reason": "x"})
+    return tuple(Occurrence.objects.get(key=k).id for k in (a, b, c))
+
+
+def test_moved_chain_goes_straight_to_final_target() -> None:
+    a, b, c = _chain()
+    assert read.get_occurrence(a) == MovedTo(c)
+    assert read.get_occurrence(b) == MovedTo(c)
+
+
+def test_moved_chain_to_hidden_target_is_gone() -> None:
+    a, b, c = _chain(final_visible=False)
+    assert isinstance(read.get_occurrence(a), Gone)
+    assert isinstance(read.get_occurrence(c), Gone)
+
+
+def test_default_from_is_today_in_paris(monkeypatch: pytest.MonkeyPatch) -> None:
+    from django.utils import timezone as dj_timezone
+    one("datatourisme:oct31", date(2026, 10, 31), "18:00")
+    nov1 = one("datatourisme:nov1", date(2026, 11, 1), "10:00")
+    # 23:30 UTC on 31 October is already 00:30 on 1 November in Paris.
+    monkeypatch.setattr(dj_timezone, "now", lambda: datetime(2026, 10, 31, 23, 30, tzinfo=timezone.utc))
+    assert keys(search_occurrences(None, None, None, None, [], None)) == [nov1]

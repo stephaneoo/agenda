@@ -51,6 +51,9 @@ class Claim(models.Model):
     target_type = models.CharField(max_length=10, choices=TARGET_TYPES)
     # An event key ("datatourisme:<id>"), or an occurrence key "<event key>/<YYYY-MM-DD>".
     target_key = models.CharField(max_length=250)
+    # The event the target belongs to (claims.keys.event_key_of): the projection selects an
+    # event's claims by equality on it, never by a LIKE prefix on target_key.
+    event_key = models.CharField(max_length=250, db_default="", db_index=True)
     field = models.CharField(max_length=40)
     # SQL NULL stands for a JSON null: "the source says there is none".
     value = models.JSONField(null=True)

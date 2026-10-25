@@ -78,4 +78,7 @@ def bounds(start: str, end: str | None) -> tuple[datetime, datetime]:
 
 
 def today() -> date:
-    return datetime.now(PARIS).date()
+    """Today in Paris, from Django's clock (so tests can move it)."""
+    from django.utils import timezone
+
+    return timezone.now().astimezone(PARIS).date()

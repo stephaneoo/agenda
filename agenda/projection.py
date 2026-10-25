@@ -8,13 +8,17 @@ Claim fields, by target:
   resolved by priority; listed (true|false), kept per source.
 
 `visibility` is {"value": "published"|"pending"|"hidden", "reason": str}, or the bare value.
-With no visibility claim, an event or occurrence is published (post-moderation).
+With no visibility claim, an event or occurrence is published (post-moderation); an
+invalid one counts as hidden. Other invalid claims (agenda.fields) are dropped before
+resolution, so the next valid claim wins. URLs other than absolute http(s) become null.
+`moved_to` chains are followed to their final target; a cycle of moves is ignored.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import re
 import unicodedata
 from collections import defaultdict
@@ -23,19 +27,19 @@ from datetime import datetime
 from typing import Any
 
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
 from agenda.categories import DEFAULT, SLUGS
-from agenda.models import STATUSES, VISIBILITIES, Event, Occurrence, projection_writer
+from agenda.fields import PER_SOURCE, STATUSES, local_value, problem, safe_url, visibility_of
+from agenda.models import Event, Occurrence, projection_writer
 from agenda.periods import OccurrenceDates
 from agenda.timeutil import bounds, day_start, format_local, parse, to_local
-from claims.keys import event_key_of, split_occurrence_key
+from claims.keys import split_occurrence_key
 from claims.models import Claim, Source
 from claims.resolve import resolve
 from claims.services import lock_event
 
-PER_SOURCE = {"listed", "source_url", "source_updated_at"}
+logger = logging.getLogger(__name__)
 LOCATION_KEYS = ("name", "street", "postal_code", "commune", "commune_name", "lat", "lon")
 
 
@@ -81,7 +85,7 @@ def _location(value: Any) -> dict[str, Any]:
 def _organizer(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict) or not _text(value.get("name")):
         return None
-    return {"name": _text(value["name"]), "url": _text(value.get("url"))}
+    return {"name": _text(value["name"]), "url": safe_url(value.get("url"))}
 
 
 def _offers(value: Any) -> dict[str, Any] | None:
@@ -89,27 +93,23 @@ def _offers(value: Any) -> dict[str, Any] | None:
         return None
     is_free = value.get("is_free")
     offers = {"is_free": is_free if isinstance(is_free, bool) else None,
-              "price": _text(value.get("price")), "url": _text(value.get("url"))}
+              "price": _text(value.get("price")), "url": safe_url(value.get("url"))}
     return offers if any(v is not None for v in offers.values()) else None
 
 
-def _visibility(value: Any) -> str:
-    if isinstance(value, dict):
-        value = value.get("value")
-    return value if value in VISIBILITIES else "published"
+def _visibility(winner: Any) -> str:
+    """No claim: published. A claim with a value we don't know fails closed: hidden."""
+    if winner is None:
+        return "published"
+    return visibility_of(winner.value) or "hidden"
 
 
 def _local(value: Any) -> str | None:
     """A local date or date-time claim, normalised; None if it isn't one."""
-    if not isinstance(value, str):
+    parsed = local_value(value)
+    if parsed is None:
         return None
-    try:
-        if len(value) == 10:
-            return datetime.strptime(value, "%Y-%m-%d").date().isoformat()
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return format_local(parsed) if parsed.tzinfo else None
+    return format_local(parsed) if isinstance(parsed, datetime) else parsed.isoformat()
 
 
 def _before(end: str, start: str) -> bool:
@@ -127,8 +127,13 @@ def _winner(winners: dict, field: str) -> Any:
 # --- Projection --------------------------------------------------------------------------
 
 def _claims_of(event_key: str) -> list[Claim]:
-    rows = Claim.objects.filter(Q(target_key=event_key) | Q(target_key__startswith=event_key + "/")).select_related("source")
-    return [c for c in rows if event_key_of(c.target_type, c.target_key) == event_key]
+    """The event's usable claims. Invalid ones (e.g. stored before validation) are dropped,
+    except visibility, which _visibility turns into hidden."""
+    rows = Claim.objects.filter(event_key=event_key).select_related("source")
+    return [
+        c for c in rows
+        if c.field == "visibility" or problem(c.target_type, c.target_key, c.field, c.value) is None
+    ]
 
 
 def _sources(contributors: set[str], claims: list[Claim], sources: dict[str, Source]) -> list[dict]:
@@ -148,7 +153,7 @@ def _sources(contributors: set[str], claims: list[Claim], sources: dict[str, Sou
             updated = format_local(day_start(parse(updated)))
         out.append({
             "name": sources[name].label,
-            "url": _text(meta[name].get("source_url")),
+            "url": safe_url(meta[name].get("source_url")),
             "licence": sources[name].licence or "",
             "updated_at": updated or format_local(newest[name]),
         })
@@ -173,11 +178,13 @@ def _occurrence_values(key: str, claims: list[Claim]) -> tuple[dict[str, Any], s
     if status == "rescheduled" and previous_start is None:
         status = "scheduled"  # the API requires previous_start with rescheduled
     # A source that dropped the date only after it had ended doesn't withdraw it.
+    # The cutoff is the end as the *current* dates give it: moving the time later on the
+    # same day can turn an earlier drop into a withdrawal. Accepted for v1.
     listed = any(c.value is True or (c.value is False and c.seen_at > last) for c in claims if c.field == "listed")
     values = {
         "local_date": local_date, "start": start, "end": end, "status": status,
         "previous_start": previous_start, "listed": listed,
-        "visibility": _visibility(_winner(winners, "visibility")),
+        "visibility": _visibility(winners.get("visibility")),
         "start_utc": first, "end_utc_inclusive": last,
     }
     contributors = {w.source for w in winners.values()} | {c.source_id for c in claims if c.field == "listed" and c.value is True}
@@ -206,7 +213,7 @@ def _compute(event_key: str, claims: list[Claim]) -> tuple[dict[str, Any], dict[
     name = _text(_winner(winners, "name")) or ""
     location = _location(_winner(winners, "location"))
     category = _winner(winners, "category")
-    visibility = _visibility(_winner(winners, "visibility"))
+    visibility = _visibility(winners.get("visibility"))
     cited = _sources(contributors, claims, sources)
     complete = bool(name and location["commune"] and location["postal_code"] and location["commune_name"] and cited)
     event = {
@@ -223,13 +230,42 @@ def _compute(event_key: str, claims: list[Claim]) -> tuple[dict[str, Any], dict[
         "slug": f"{slugify(name)}-{url_key(event_key)}",
         "url_key": url_key(event_key),
     }
+    finals = _final_targets(event_key, moves, set(occurrences))
     for key, values in occurrences.items():
-        target = moves.get(key)
-        values["moved_to_id"] = occurrence_id(target) if target in occurrences else None
+        target = finals.get(key)
+        values["moved_to_id"] = occurrence_id(target) if target else None
         values["shown"] = bool(
             event["shown"] and values["listed"] and values["visibility"] == "published" and not values["moved_to_id"]
         )
     return event, occurrences
+
+
+def _final_targets(event_key: str, moves: dict[str, str], known: set[str]) -> dict[str, str]:
+    """Each moved occurrence's final target. Moves to an unknown occurrence don't count, and
+    every move in a cycle is ignored: its members stay where they are."""
+    moves = {k: t for k, t in moves.items() if t in known}
+    in_cycle: set[str] = set()
+    for start in moves:
+        seen: dict[str, int] = {}
+        path: list[str] = []
+        k = start
+        while k in moves and k not in seen:
+            seen[k] = len(path)
+            path.append(k)
+            k = moves[k]
+        if k in seen:
+            in_cycle |= set(path[seen[k]:])
+    if in_cycle:
+        logger.warning("projection: %s: moved_to cycle ignored: %s", event_key, ", ".join(sorted(in_cycle)))
+    finals = {}
+    for start in moves:
+        if start in in_cycle:
+            continue
+        k = start
+        while k in moves and k not in in_cycle:
+            k = moves[k]
+        finals[start] = k
+    return finals
 
 
 def _apply(row: Any, values: dict[str, Any], now: datetime) -> bool:
@@ -271,20 +307,18 @@ def _project(event_key: str, claims: list[Claim], now: datetime) -> None:
         row.delete()
 
 
-def _event_keys(pairs: Iterable[tuple[str, str]]) -> set[str]:
-    return {k for t, key in pairs if (k := event_key_of(t, key))}
-
-
 def rebuild_all() -> int:
     """Reproject every event from its claims, and drop canonical rows with no claims left.
 
-    Unchanged rows are left as they are, updated_at included. Returns the number of events.
+    One transaction per event, under that event's lock, so the rebuild never holds more than
+    one event at a time. Unchanged rows are left as they are, updated_at included. Run it
+    after any change to the Source table (priorities, labels, licences). Returns the number
+    of event keys with claims.
     """
-    with transaction.atomic(), projection_writer():
-        keys = _event_keys(Claim.objects.values_list("target_type", "target_key").distinct())
-        for stale in Event.objects.only("id", "key"):
-            if stale.key not in keys:
-                stale.delete()
-        for key in sorted(keys):
-            project_event(key)
+    keys = set(Claim.objects.exclude(event_key="").values_list("event_key", flat=True).distinct())
+    for key in sorted(keys):
+        project_event(key)
+    for stale in [k for k in Event.objects.values_list("key", flat=True) if k not in keys]:
+        # project_event reads the claims again under the lock: if one arrived since, it stays.
+        project_event(stale)
     return len(keys)
