@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 from typing import Any
+
+from claims.keys import year_ok
 
 
 @dataclass(frozen=True)
@@ -37,14 +40,18 @@ class OccurrenceDates:
 
     @classmethod
     def from_claim(cls, value: Any) -> OccurrenceDates | None:
-        """Parse a `dates` claim; None when it is malformed."""
+        """Parse a `dates` claim; None when it is malformed.
+
+        Dates are YYYY-MM-DD within claims.keys.MIN_YEAR..MAX_YEAR, times HH:MM[:SS] with
+        no offset (wall-clock time in Paris).
+        """
         if not isinstance(value, dict):
             return None
         try:
-            start_date = date.fromisoformat(value["start_date"])
-            start_time = time.fromisoformat(value["start_time"]) if value.get("start_time") else None
-            end_date = date.fromisoformat(value["end_date"]) if value.get("end_date") else None
-            end_time = time.fromisoformat(value["end_time"]) if value.get("end_time") else None
+            start_date = _date(value["start_date"])
+            start_time = _time(value.get("start_time"))
+            end_date = _date(value["end_date"]) if value.get("end_date") is not None else None
+            end_time = _time(value.get("end_time"))
         except (KeyError, TypeError, ValueError):
             return None
         if end_time is not None and end_date is None:
@@ -52,6 +59,27 @@ class OccurrenceDates:
         if end_date is not None and end_date < start_date:
             return None
         return cls(start_date, start_time, end_date, end_time)
+
+
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TIME = re.compile(r"^\d{2}:\d{2}(:\d{2})?$")
+
+
+def _date(value: Any) -> date:
+    if not isinstance(value, str) or not _DATE.match(value):
+        raise ValueError(f"not a date: {value!r}")
+    d = date.fromisoformat(value)
+    if not year_ok(d):
+        raise ValueError(f"year out of range: {value!r}")
+    return d
+
+
+def _time(value: Any) -> time | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _TIME.match(value):
+        raise ValueError(f"not a time: {value!r}")
+    return time.fromisoformat(value)
 
 
 def _end_date(d: date, start_time: time | None, end_time: time | None) -> date:

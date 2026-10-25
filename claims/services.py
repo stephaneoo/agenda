@@ -49,7 +49,7 @@ def _json(value: Any) -> Any:
     """The value as the JSON column will give it back."""
     try:
         return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
-    except (TypeError, ValueError) as e:
+    except (TypeError, ValueError, RecursionError) as e:
         raise ValueError(f"claim value is not JSON: {e}") from None
 
 

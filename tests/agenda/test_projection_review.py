@@ -41,7 +41,9 @@ def legacy(key: str, target_type: str, target_key: str, field: str, value: objec
 
 BAD_URLS = ["javascript:alert(1)", "JaVaScRiPt:alert(1)", " javascript:alert(1)", "data:text/html,<b>x</b>",
             "/relative", "relative/path", "//evil.example", "http://", "https:///nohost", "ftp://x.example",
-            "http://exa mple.org", "vbscript:x"]
+            "http://exa mple.org", "vbscript:x",
+            # Security review L5: user info can disguise the real host (https://bank.example@evil.example/).
+            "https://user@e.example/", "https://user:pw@e.example/", "https://bank.example@evil.example/"]
 
 
 @pytest.mark.parametrize("url", BAD_URLS)
