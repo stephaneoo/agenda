@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,15 +57,25 @@ def pages_of(rows: list[dict], size: int = 25) -> list[tuple[int, dict]]:
                    "links": {"next": None, "prev": None}}) for n, chunk in enumerate(chunks, 1)]
 
 
+class FakeRaw:
+    """The urllib3 response under requests' Response, as client._read_body reads it."""
+
+    def __init__(self, content: bytes) -> None:
+        self._content = io.BytesIO(content)
+
+    def read1(self, amt: int, decode_content: bool = True) -> bytes:
+        return self._content.read1(amt)
+
+
 class FakeResponse:
     def __init__(self, status: int, body: Any) -> None:
         self.status_code = status
-        self._body = body
         self.content = json.dumps(body).encode()
-        self.headers = {"Content-Type": "application/json"}
+        self.headers = {"Content-Type": "application/json", "Content-Length": str(len(self.content))}
+        self.raw = FakeRaw(self.content)
 
-    def json(self) -> Any:
-        return self._body
+    def close(self) -> None:
+        pass
 
 
 class FakeSession:
@@ -78,7 +89,7 @@ class FakeSession:
         # in call order; the same version throughout when not given.
         self.versions = list(versions or [])
 
-    def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+    def get(self, url: str, params: dict | None = None, **kwargs: Any) -> FakeResponse:
         from ingest.datatourisme import client
 
         if url in (client.RESOURCE_META_URL, client.TABULAR_META_URL):

@@ -8,6 +8,10 @@ organizer, prices, status or images; contacts are kept in the raw payload only.
 Periodes_regroupees is "<start>[<-><end>]" periods joined by "|", dates only (YYYY-MM-DD):
 the export carries no times and no weekdays. A recurrence comes as a list of single days, or
 as one long range whose name gives the weekday ("Marché du jeudi"): see weekday_in_name.
+
+Bounds (batch C security review): dates are kept within a window around the run's local
+date (WINDOW_BEFORE, WINDOW_AFTER years), and a row that still expands to more than
+MAX_OCCURRENCES dates is refused (TooManyDates).
 """
 
 from __future__ import annotations
@@ -30,12 +34,23 @@ KEY_PREFIX = "datatourisme:"
 _PERIOD = re.compile(r"^(\d{4}-\d{2}-\d{2})(?:<->(\d{4}-\d{2}-\d{2}))?$")
 _ID = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 _POSTCODE = re.compile(r"^\d{5}$")
-# Control characters other than tab and newline; PostgreSQL refuses NUL anyway.
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# Control characters other than tab and newline (C0, DEL, C1); PostgreSQL refuses NUL anyway.
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# Bidi embeddings, overrides and isolates, the directional marks, and invisible format
+# characters: they can reorder or hide text where it is shown. Removed outright.
+_FORMAT = re.compile("[\u202a-\u202e\u2066-\u2069\u200e\u200f\u061c\u200b\u2060\ufeff]")
+SOURCE_URL_PREFIX = "https://data.datatourisme.fr/"
+WINDOW_BEFORE = 1  # years before the run's date
+WINDOW_AFTER = 2  # years after
+MAX_OCCURRENCES = 400  # per event, after the window
 
 
 class RowError(ValueError):
     """A row the sync can't use: no identity, no name or no dates."""
+
+
+class TooManyDates(RowError):
+    """A row whose dates expand to more than MAX_OCCURRENCES occurrences: refused."""
 
 
 # --- Text ----------------------------------------------------------------------------------
@@ -43,7 +58,7 @@ class RowError(ValueError):
 def clean(value: Any, *, one_line: bool = False) -> str | None:
     if not isinstance(value, str):
         return None
-    text = _CONTROL.sub(" ", value)
+    text = _CONTROL.sub(" ", _FORMAT.sub("", value))
     text = " ".join(text.split()) if one_line else "\n".join(" ".join(line.split()) for line in text.splitlines())
     return text.strip() or None
 
@@ -139,7 +154,19 @@ def weekday_in_name(name: str | None) -> int | None:
     return i if any(re.search(f, text) for f in forms) else None
 
 
-def periods(raw: Any, name: str | None = None) -> list[Period]:
+def _add_years(d: date, years: int) -> date:
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:  # 29 February
+        return d.replace(year=d.year + years, day=28)
+
+
+def window(today: date) -> tuple[date, date]:
+    """The dates a sync keeps, around `today` (the run's local date)."""
+    return _add_years(today, -WINDOW_BEFORE), _add_years(today, WINDOW_AFTER)
+
+
+def periods(raw: Any, name: str | None = None, within: tuple[date, date] | None = None) -> list[Period]:
     """The periods of Periodes_regroupees. Malformed pieces are dropped.
 
     An end before its start in the same year is a season over the new year that the export
@@ -147,6 +174,11 @@ def periods(raw: Any, name: str | None = None) -> list[Period]:
     touch are merged, so a season split in two isn't two spanning occurrences. A merged
     range over WEEKLY_MIN_DAYS whose `name` gives one weekday (weekday_in_name) becomes
     that weekday each week.
+
+    `within` (first, last), when given: single days outside it are dropped, weekly ranges
+    are cut to it, and continuous ranges are dropped when they don't overlap it. A
+    continuous range that overlaps is kept whole: it is one occurrence whatever its length,
+    and its start date is its identity (cutting it would move its URL every day).
     """
     if not isinstance(raw, str):
         return []
@@ -173,10 +205,15 @@ def periods(raw: Any, name: str | None = None) -> list[Period]:
         else:
             merged.append([start, end])
     weekday = weekday_in_name(name)
-    out = [Period(s, e) for s, e in singles]
+    lo, hi = within or (date.min, date.max)
+    out = [Period(s, e) for s, e in singles if lo <= s <= hi]
     for s, e in merged:
-        weekly = weekday is not None and (e - s).days > WEEKLY_MIN_DAYS
-        out.append(Period(s, e, weekdays=frozenset({weekday}) if weekly else None))
+        if e < lo or s > hi:
+            continue
+        if weekday is not None and (e - s).days > WEEKLY_MIN_DAYS:
+            out.append(Period(max(s, lo), min(e, hi), weekdays=frozenset({weekday})))
+        else:
+            out.append(Period(s, e))
     return out
 
 
@@ -200,15 +237,24 @@ def place(row: dict) -> Place:
     return Place(lat, lon, postal_code, name)
 
 
+def source_url(row: dict) -> str | None:
+    """URI_ID_du_POI, only when it is a DATAtourisme https URL."""
+    url = safe_url(row.get("URI_ID_du_POI"))
+    return url if url and url.startswith(SOURCE_URL_PREFIX) else None
+
+
 def row_to_claims(
-    row: dict, *, commune: str, commune_name: str, seen_at: datetime, postal_codes: list[str] | None = None
+    row: dict, *, commune: str, commune_name: str, seen_at: datetime, today: date,
+    postal_codes: list[str] | None = None,
 ) -> tuple[str, list[NewClaim]]:
     """(event key, claims) for one row in `commune` (an INSEE code, already resolved).
 
     Event: name, description, category, location, organizer and offers (null: the export
     has none), visibility published, source_url, source_updated_at. Each occurrence: dates
     and listed: true. Every claim is seen at `seen_at`, the sync's fetch time. Strings are
-    cut to the claim length caps. Raises RowError for a row with no id, name or dates.
+    cut to the claim length caps. Dates are kept within window(today), `today` being the
+    run's local date. Raises RowError for a row with no id, name or dates, TooManyDates for
+    one with more than MAX_OCCURRENCES of them.
     """
     key = event_key(row)
     if key is None:
@@ -216,9 +262,11 @@ def row_to_claims(
     name = truncate(clean(row.get("Nom_du_POI"), one_line=True), MAX_NAME)
     if not name:
         raise RowError(f"{key!r}: no name")
-    occurrences = expand(periods(row.get("Periodes_regroupees"), name))
+    occurrences = expand(periods(row.get("Periodes_regroupees"), name, window(today)))
     if not occurrences:
-        raise RowError(f"{key!r}: no usable dates in Periodes_regroupees")
+        raise RowError(f"{key!r}: no usable dates in Periodes_regroupees (within {window(today)})")
+    if len(occurrences) > MAX_OCCURRENCES:
+        raise TooManyDates(f"{key!r}: {len(occurrences)} dates, more than {MAX_OCCURRENCES}")
     p = place(row)
     postal_code = p.postal_code or (postal_codes[0] if postal_codes else None)
     if postal_code is None:
@@ -240,7 +288,7 @@ def row_to_claims(
         "organizer": None,
         "offers": None,
         "visibility": {"value": "published"},
-        "source_url": safe_url(row.get("URI_ID_du_POI")),
+        "source_url": source_url(row),
         "source_updated_at": updated.isoformat() if updated else None,
     }
     claims = [NewClaim("event", key, field, value, SOURCE, seen_at) for field, value in values.items()]

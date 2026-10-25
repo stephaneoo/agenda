@@ -132,7 +132,7 @@ def test_second_run_while_one_holds_the_lock_fails_already_running(clock, status
     other = connections.create_connection("default")
     try:
         with other.cursor() as cursor:
-            cursor.execute("SELECT pg_advisory_lock(%s)", [sync.LOCK_KEY])
+            cursor.execute("SELECT pg_advisory_lock(%s, %s)", [sync.LOCK_CLASS, sync.LOCK_OBJECT])
         result = run(stable(3))
         assert result.status == "failed" and "already running" in result.error
         assert Event.objects.count() == 0
@@ -169,7 +169,7 @@ def test_allow_mass_withdrawal_and_drift_warning(clock) -> None:
     run(rows)
     clock.now = NOW + timedelta(days=1)
     assert run(rows[:5]).status == "partial"
-    result = run(rows[:5], allow_mass_withdrawal=True)
+    result = run(rows[:5], allow_mass_withdrawal=5)
     assert result.status == "clean" and result.withdrawn == 5
     assert "withdrew 50%" in result.summary()
     clock.now = NOW + timedelta(days=2)
@@ -190,10 +190,10 @@ class SwitchingSession(FakeSession):
         super().__init__(v1)
         self.v2, self.switch_after = v2, switch_after
 
-    def get(self, url, params=None, timeout=None):
+    def get(self, url, params=None, **kwargs):
         if len(self.calls) >= self.switch_after:
             self.pages = self.v2
-        return super().get(url, params, timeout)
+        return super().get(url, params, **kwargs)
 
 
 def test_same_total_shift_mid_pagination_fails_and_withdraws_nothing(clock) -> None:

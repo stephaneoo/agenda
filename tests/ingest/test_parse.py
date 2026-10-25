@@ -8,6 +8,7 @@ from ingest.datatourisme import mapping, parse
 from tests.ingest.conftest import recorded_rows, row
 
 SEEN = datetime(2026, 10, 26, 5, 0, tzinfo=UTC)
+TODAY = date(2026, 10, 26)
 
 
 def occurrences(raw: str | None) -> list[OccurrenceDates]:
@@ -77,7 +78,7 @@ def test_category_mapping_covers_fixture_types_else_autre() -> None:
 def test_row_to_claims_truncates_and_writes_valid_claims() -> None:
     long_name = "Grande fête " + "des olives " * 40
     r = row(7, "2026-11-05<->2026-11-05|2026-11-12<->2026-11-12", name=long_name, Description="mot " * 3000)
-    key, claims = parse.row_to_claims(r, commune="26220", commune_name="Nyons", seen_at=SEEN)
+    key, claims = parse.row_to_claims(r, commune="26220", commune_name="Nyons", seen_at=SEEN, today=TODAY)
     assert key == "datatourisme:00000000-0000-4000-8000-000000000007"
     by = {(c.target_key, c.field): c for c in claims}
     name = by[(key, "name")].value
@@ -103,7 +104,7 @@ def test_row_to_claims_truncates_and_writes_valid_claims() -> None:
 @pytest.mark.parametrize("bad", [{"URI_ID_du_POI": None}, {"Nom_du_POI": "  "}, {"Periodes_regroupees": "jamais"}])
 def test_row_without_id_name_or_dates_is_refused(bad: dict) -> None:
     with pytest.raises(parse.RowError):
-        parse.row_to_claims(row(1, **bad), commune="26220", commune_name="Nyons", seen_at=SEEN)
+        parse.row_to_claims(row(1, **bad), commune="26220", commune_name="Nyons", seen_at=SEEN, today=TODAY)
 
 
 # --- Weekday in the name (batch C review, M2a) -------------------------------------------------
@@ -136,7 +137,7 @@ def test_no_weekday_expansion(name: str, periods: str) -> None:
 
 def test_row_to_claims_expands_a_weekly_market() -> None:
     r = row(5, "2026-01-01<->2026-12-31", name="Marché nyonsais du jeudi")
-    key, claims = parse.row_to_claims(r, commune="26220", commune_name="Nyons", seen_at=SEEN)
+    key, claims = parse.row_to_claims(r, commune="26220", commune_name="Nyons", seen_at=SEEN, today=TODAY)
     dates = [c for c in claims if c.field == "dates"]
     assert len(dates) == 53  # 2026 has 53 Thursdays
     assert dates[0].target_key == f"{key}/2026-01-01" and dates[-1].target_key == f"{key}/2026-12-31"

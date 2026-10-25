@@ -152,6 +152,9 @@ USE_TZ = True
 # Root of the absolute URLs in the API (e.g. https://agenda.example.org). Empty: the request's host.
 SITE_URL = os.environ.get("AGENDA_SITE_URL", "").rstrip("/")
 
+# Wall-clock budget of one DATAtourisme sync run (ingest.sync.run): past it, the run fails.
+SYNC_DEADLINE_SECONDS = int(os.environ.get("AGENDA_SYNC_DEADLINE_SECONDS") or 15 * 60)
+
 # Each timer job's last outcome (agenda_site.status), rendered by the MOTD.
 STATUS_FILE = os.environ.get("AGENDA_STATUS_FILE", "/var/lib/agenda/status.json")
 
