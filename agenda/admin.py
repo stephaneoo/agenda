@@ -93,7 +93,7 @@ class EditForm(forms.Form):
         if field in JSON_FIELDS and not data.get("revert"):
             try:
                 data["parsed"] = json.loads(raw) if raw.strip() else None
-            except ValueError:
+            except (ValueError, RecursionError):
                 raise forms.ValidationError("La valeur n'est pas du JSON valide.") from None
         else:
             data["parsed"] = raw.strip() or None

@@ -166,7 +166,24 @@ def _has_nul(value: Any) -> bool:
     return False
 
 
+MAX_DEPTH = 32  # no valid value nests more than a few levels
+
+
+def _too_deep(value: Any) -> bool:
+    """Nested more than MAX_DEPTH lists or objects, checked without recursion."""
+    stack = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, (dict, list)):
+            if depth >= MAX_DEPTH:
+                return True
+            stack.extend((v, depth + 1) for v in (item.values() if isinstance(item, dict) else item))
+    return False
+
+
 def _size_problem(value: Any) -> str | None:
+    if _too_deep(value):
+        return f"value is nested more than {MAX_DEPTH} levels"
     try:
         text = json.dumps(value, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError, RecursionError):

@@ -76,6 +76,8 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    # First: /admin/ answers only loopback (the SSH tunnel), whatever comes after.
+    "agenda_site.site.LoopbackAdminMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "agenda_site.csp.ContentSecurityPolicyMiddleware",
     "api.problems.CorsMiddleware",

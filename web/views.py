@@ -23,6 +23,7 @@ from agenda import read
 from agenda.categories import SLUGS
 from agenda.models import Occurrence
 from agenda.timeutil import PARIS, parse, today
+from agenda_site.site import is_loopback
 from web.jsonld import occurrence_jsonld
 
 RADII = [0, 10, 20, 30]
@@ -182,11 +183,7 @@ def _migrations_applied() -> bool:
     return set(loader.graph.nodes) <= set(loader.applied_migrations)
 
 
-# Only a request from the host itself sees the details. Caddy reaches gunicorn over a Unix
-# socket, where gunicorn sets REMOTE_ADDR to "" (no peer address), so a request through Caddy
-# is never one of these, whatever headers it carries. On the host, gunicorn also listens on
-# loopback for the deploy's check (plan, Tasks 14 and 16).
-LOOPBACK = {"127.0.0.1", "::1"}
+# Only a request from the host itself sees the details (agenda_site.site.LOOPBACK).
 
 
 @never_cache
@@ -207,7 +204,7 @@ def healthz(request: HttpRequest) -> JsonResponse:
         pass
     ok = database and migrations
     status = 200 if ok else 503
-    if request.META.get("REMOTE_ADDR") not in LOOPBACK:
+    if not is_loopback(request):
         return JsonResponse({"status": "ok" if ok else "unavailable"}, status=status)
     body = {"status": "ok" if ok else "error", "database": database, "migrations": migrations, "debug": settings.DEBUG}
     return JsonResponse(body, status=status)
