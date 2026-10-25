@@ -18,6 +18,11 @@ dev = [
   "django-migration-linter>=5.1",
 ]
 
+[tool.uv]
+# Cooldown: resolve only releases at least a week old, so a hijacked release has time to be
+# noticed and yanked before it reaches the lock.
+exclude-newer = "7 days"
+
 # No [build-system]: the project is virtual. The venv carries the dependencies,
 # and the app runs from the source tree.
 

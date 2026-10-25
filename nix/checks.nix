@@ -53,4 +53,8 @@ in
       python manage.py check --deploy --fail-level WARNING
   '';
 
+  # Every package in uv.lock comes from files.pythonhosted.org.
+  lock-sources = withSource "agenda-lock-sources" ''
+    python -m tools.check_lock_sources uv.lock
+  '';
 }
