@@ -14,8 +14,8 @@ Each batch goes through: implement, review, implementer fixes, security review, 
 | Batch | Tasks | State |
 |---|---|---|
 | A | 1–4: flake, checks, geo, travel matrix | **shipped**: c6e1978..fca2e01 |
-| B | 5–9: claims, projection, read layer, API, web | in progress |
-| C | 10–12: ingestion, admin, offline | pending |
+| B | 5–9: claims, projection, read layer, API, web | **shipped**: 0df1847..7b42767 |
+| C | 10–12: ingestion, admin, offline | in progress |
 | D | 13–17: infra, host, backups, deploy, runbook | pending |
 
 ## Batch A verdict (2026-10-25)
@@ -23,6 +23,20 @@ Each batch goes through: implement, review, implementer fixes, security review, 
 - Security: 4 mediums (prod HTTPS settings, dev-mode guard, deny-list sync, old rsync for pull) and lows. All fixed, or noted in the plan for Tasks 11, 13 and 14.
 - Orchestrator verification: `nix run .#check` all green, 99 tests, 0 migration violations, no secret-like file tracked.
 - 64 communes covered within 30 min of Nyons. The data has version `2026-10-25 osm:2026-10-24 ign:2026-01-01`.
+
+## Batch B verdict (2026-10-25)
+- Review: 6 majors, all reproduced and all fixed:
+  - stored XSS through `javascript:` URLs;
+  - moved chains and cycles;
+  - invalid winning claims, and visibility failing open;
+  - the rebuild run as one giant transaction;
+  - `LIKE` falling back to a seq scan outside C collation;
+  - error responses that weren't problem+json.
+
+  Plus 12 minors, all fixed.
+- Security: one high, fixed: validation accepted values the projection couldn't store, which bricked restores and rebuilds. Mediums fixed: future `seen_at`, the unguarded `Claim` table, missing length caps. Lows fixed: NUL bytes giving 500s, CSP, `/healthz` details for loopback only, one generic 410 body, `safe_url` refusing userinfo, CORS, log escaping. Admin hardening (axes, IP allow-list or SSH tunnel), the Caddy rate limit and gunicorn limits are plan notes for Tasks 11 and 14.
+- Orchestrator verification: `nix run .#check` all green, 410 tests, 0 migration violations, no secret tracked. API v1.2.0.
+- Manual Google Rich Results Test: **not done**, because there is no browser here. It's left for Pierre once prod is up.
 
 ## Open risks
 - **Darwin is unverified.** The flake's darwin outputs evaluate but have never been built on a Mac. The colleague deploys from a Mac, so `nix run .#check` and the deploy have to be built and run on a Mac before handover.
