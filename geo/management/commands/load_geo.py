@@ -13,7 +13,8 @@ from typing import Any
 
 from django.contrib.gis.geos import GEOSGeometry, MultiPolygon, Point
 from django.core.management.base import BaseCommand, CommandError, CommandParser
-from django.db import transaction
+from django.db import IntegrityError, connection, transaction
+from django.db.models import ProtectedError
 
 from geo.models import Commune, CoveredArea, MatrixInfo, TravelTime
 
@@ -85,10 +86,22 @@ class Command(BaseCommand):
         covered_idx = [order.index(i) for i in covered]
 
         with transaction.atomic():
+            # Check foreign keys now rather than at commit, so a reference to a removed
+            # commune surfaces here, as the error below.
+            with connection.cursor() as cursor:
+                cursor.execute("SET CONSTRAINTS ALL IMMEDIATE")
             TravelTime.objects.all().delete()
             CoveredArea.objects.all().delete()
             MatrixInfo.objects.all().delete()
-            Commune.objects.exclude(insee__in=by_insee).delete()
+            removed = Commune.objects.exclude(insee__in=by_insee)
+            removed_codes = sorted(removed.values_list("insee", flat=True))
+            try:
+                with transaction.atomic():
+                    removed.delete()
+            except (ProtectedError, IntegrityError) as e:
+                raise CommandError(
+                    f"communes still referenced, not removed: {', '.join(removed_codes)} ({e})"
+                ) from e
             Commune.objects.bulk_create(
                 by_insee.values(),
                 update_conflicts=True,

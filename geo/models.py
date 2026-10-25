@@ -2,6 +2,8 @@ from django.contrib.gis.db import models
 from django.contrib.postgres.fields import ArrayField
 
 
+# Anything that points at Commune uses on_delete=PROTECT: load_geo replaces communes, and
+# must fail rather than silently delete what refers to one that disappeared.
 class Commune(models.Model):
     insee = models.CharField(primary_key=True, max_length=5)
     name = models.CharField(max_length=100)
@@ -20,8 +22,8 @@ class Commune(models.Model):
 class TravelTime(models.Model):
     """Car travel time between two covered communes' reference points. None: unreachable."""
 
-    origin = models.ForeignKey(Commune, on_delete=models.CASCADE, related_name="+")
-    destination = models.ForeignKey(Commune, on_delete=models.CASCADE, related_name="+")
+    origin = models.ForeignKey(Commune, on_delete=models.PROTECT, related_name="+")
+    destination = models.ForeignKey(Commune, on_delete=models.PROTECT, related_name="+")
     minutes = models.PositiveIntegerField(null=True)
 
     class Meta:
@@ -29,7 +31,7 @@ class TravelTime(models.Model):
 
 
 class CoveredArea(models.Model):
-    insee = models.OneToOneField(Commune, primary_key=True, on_delete=models.CASCADE, db_column="insee")
+    insee = models.OneToOneField(Commune, primary_key=True, on_delete=models.PROTECT, db_column="insee")
 
 
 class MatrixInfo(models.Model):

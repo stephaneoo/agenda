@@ -1,9 +1,13 @@
+import json
 from pathlib import Path
 
 import pytest
-from django.core.management import call_command
+from django.apps import apps
+from django.core.management import CommandError, call_command
+from django.db import connection, models
 
 from geo import services
+from geo.models import Commune
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -25,6 +29,9 @@ def test_load_geo_sets_covered_area_by_30_min_from_nyons(geo_loaded: None) -> No
 
 def test_reachable_within_0_is_origin_only(geo_loaded: None) -> None:
     assert services.reachable("26220", 0) == {"26220"}
+    # Valréas -> Vinsobres is 0 min in the fixture, and within=0 still means the origin only.
+    assert services.reachable("84138", 0) == {"84138"}
+    assert "26377" in services.reachable("84138", 1)
     assert services.reachable("26220", 12) == {"26220", "26182", "26377"}
 
 
@@ -44,15 +51,40 @@ def test_resolve_commune_point_in_polygon(geo_loaded: None) -> None:
 def test_resolve_commune_falls_back_to_postcode_and_name(geo_loaded: None) -> None:
     assert services.resolve_commune(None, None, "26110", "Mirabel aux Baronnies") == "26182"
     assert services.resolve_commune(None, None, "84600", "VALREAS") == "84138"
-    # Coordinates that land in no known commune (here lat/lon swapped) fall back too.
-    assert services.resolve_commune(5.1406, 44.3606, "26110", "Nyons") == "26220"
+    # Missing or invalid coordinates fall back.
+    assert services.resolve_commune(None, 5.1406, "26110", "Nyons") == "26220"
+    assert services.resolve_commune(95.0, 5.1406, "26110", "Nyons") == "26220"
+    assert services.resolve_commune(float("nan"), 5.1406, "26110", "Nyons") == "26220"
+
+
+def test_resolve_commune_valid_point_outside_every_commune_is_none(geo_loaded: None) -> None:
+    # A real point that lands nowhere we know: outside the area, or wrong data. Never guessed.
+    assert services.resolve_commune(43.0, 5.0, "26110", "Nyons") is None
+    assert services.resolve_commune(5.1406, 44.3606, "26110", "Nyons") is None  # lat/lon swapped
+
+
+def test_resolve_commune_on_shared_border_uses_address_or_gives_up(geo_loaded: None) -> None:
+    on_border = (44.60, 5.70)
+    assert services.resolve_commune(*on_border, "26110", "La Scie") == "26994"
+    assert services.resolve_commune(*on_border, "26110", "le moulin") == "26993"
+    assert services.resolve_commune(*on_border, None, None) is None
+    assert services.resolve_commune(*on_border, "26110", "Nyons") is None
+
+
+def test_normalize_name_moves_trailing_article() -> None:
+    assert services.normalize_name("Pilles (Les)") == services.normalize_name("Les Pilles")
+    assert services.normalize_name("Île (L')") == services.normalize_name("L'Île")
+    assert services.normalize_name("ST MAURICE SUR EYGUES") == "saint maurice sur eygues"
 
 
 def test_resolve_commune_returns_none_when_ambiguous(geo_loaded: None) -> None:
-    # 26110 is shared by several communes: a postcode alone never decides.
+    # Two communes share postcode 26110 and, once normalised, the name "Les Granges".
+    assert services.resolve_commune(None, None, "26110", "Les Granges") is None
+    assert services.resolve_commune(None, None, "26110", "Granges (Les)") is None
+    # A postcode alone never decides, nor a name alone, nor a name under the wrong postcode.
     assert services.resolve_commune(None, None, "26110", None) is None
-    assert services.resolve_commune(None, None, "26110", "Valréas") is None
     assert services.resolve_commune(None, None, None, "Nyons") is None
+    assert services.resolve_commune(None, None, "26110", "Valréas") is None
 
 
 def test_matrix_payload_shape(geo_loaded: None) -> None:
@@ -66,3 +98,36 @@ def test_matrix_payload_shape(geo_loaded: None) -> None:
     i, j = payload["communes"].index("26220"), payload["communes"].index("84138")
     assert m[i][j] == 30
     assert m[payload["communes"].index("26182")][payload["communes"].index("26377")] is None
+
+
+@pytest.mark.django_db
+def test_matrix_payload_empty_db() -> None:
+    assert services.matrix_payload() == {"version": None, "communes": [], "minutes": []}
+
+
+def test_every_reference_to_commune_is_protected() -> None:
+    refs = [
+        f for model in apps.get_models() for f in model._meta.get_fields()
+        if f.is_relation and f.related_model is Commune and f.concrete
+    ]
+    assert refs
+    assert all(f.remote_field.on_delete is models.PROTECT for f in refs)
+
+
+def test_load_geo_refuses_to_remove_a_referenced_commune(geo_loaded: None, tmp_path: Path) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute("CREATE TABLE scratch_ref (insee varchar(5) REFERENCES geo_commune (insee))")
+        cursor.execute("INSERT INTO scratch_ref VALUES ('26198')")
+    communes = json.loads((FIXTURES / "communes.small.geojson").read_text())
+    communes["features"] = [f for f in communes["features"] if f["properties"]["insee"] != "26198"]
+    matrix = json.loads((FIXTURES / "travel-times.small.json").read_text())
+    i = [c["insee"] for c in matrix["communes"]].index("26198")
+    matrix["communes"].pop(i)
+    matrix["minutes"] = [row[:i] + row[i + 1:] for k, row in enumerate(matrix["minutes"]) if k != i]
+    (tmp_path / "c.geojson").write_text(json.dumps(communes))
+    (tmp_path / "m.json").write_text(json.dumps(matrix))
+
+    with pytest.raises(CommandError, match="26198"):
+        call_command("load_geo", matrix=str(tmp_path / "m.json"), communes=str(tmp_path / "c.geojson"))
+    assert Commune.objects.filter(insee="26198").exists()
+    assert {c.insee for c in services.covered_communes()} == {"26220", "26182", "26377", "84138"}

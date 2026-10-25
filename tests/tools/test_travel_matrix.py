@@ -1,11 +1,20 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
 from django.core.management import call_command
 
 from geo import services
-from tools.travel_matrix import CommuneInfo, Durations, select_area, to_minutes, write_payload
+from tools.travel_matrix import (
+    CommuneInfo,
+    Durations,
+    is_stale,
+    ogr_cache_name,
+    select_area,
+    to_minutes,
+    write_payload,
+)
 
 
 def square(lat: float, lon: float, h: float = 0.01) -> dict:
@@ -62,3 +71,21 @@ def test_payload_validates_against_task3_loader(tmp_path: Path) -> None:
     assert {c.insee for c in services.covered_communes()} == {"26220", "26182"}
     assert services.travel_minutes("26220", "26182") == 10
     assert services.resolve_commune(44.558, 4.751, None, None) == "26198"
+
+
+def test_ogr_cache_name_depends_on_layer_and_filter() -> None:
+    a = ogr_cache_name("commune", "code_insee_du_departement IN ('26','84')")
+    assert a == ogr_cache_name("commune", "code_insee_du_departement IN ('26','84')")
+    assert a != ogr_cache_name("commune", "code_insee_du_departement IN ('26')")
+    assert a != ogr_cache_name("chef_lieu_de_commune", "code_insee_du_departement IN ('26','84')")
+    assert a.endswith(".geojson")
+
+
+def test_extracts_older_than_a_week_are_stale(tmp_path: Path) -> None:
+    f = tmp_path / "x.osm.pbf"
+    assert is_stale(f, max_age_days=7, now=1_000_000_000)  # missing
+    f.touch()
+    os.utime(f, (1_000_000_000, 1_000_000_000))
+    assert not is_stale(f, max_age_days=7, now=1_000_000_000 + 6 * 86400)
+    assert is_stale(f, max_age_days=7, now=1_000_000_000 + 8 * 86400)
+    assert not is_stale(f, max_age_days=None, now=1_000_000_000 + 800 * 86400)

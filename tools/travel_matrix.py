@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -42,6 +43,8 @@ LAPOSTE_POSTCODES = "https://data.laposte.fr/data-fair/api/v1/datasets/laposte-h
 # Drôme, Vaucluse and their neighbouring departments.
 DEPARTMENTS = ["26", "84", "04", "05", "07", "13", "30", "38"]
 OSRM_PORT = 5917
+# Geofabrik's *-latest files change daily; a week-old copy is refreshed.
+EXTRACT_MAX_AGE_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -145,8 +148,16 @@ def run(*cmd: str | Path) -> None:
     subprocess.run([str(c) for c in cmd], check=True)
 
 
-def download(url: str, dest: Path) -> Path:
-    if dest.exists():
+def is_stale(path: Path, max_age_days: int | None, now: float | None = None) -> bool:
+    if not path.exists():
+        return True
+    if max_age_days is None:
+        return False
+    return (now if now is not None else time.time()) - path.stat().st_mtime > max_age_days * 86400
+
+
+def download(url: str, dest: Path, max_age_days: int | None = None) -> Path:
+    if not is_stale(dest, max_age_days):
         return dest
     log(f"downloading {url}")
     part = dest.with_name(dest.name + ".part")
@@ -155,7 +166,14 @@ def download(url: str, dest: Path) -> Path:
     return dest
 
 
-def ogr_to_geojson(gpkg: Path, layer: str, where: str, out: Path) -> dict:
+def ogr_cache_name(layer: str, where: str) -> str:
+    """A cache file per layer and filter, so changing DEPARTMENTS can't reuse a stale extract."""
+    digest = hashlib.sha256(f"{ADMIN_EXPRESS_EDITION}\0{layer}\0{where}".encode()).hexdigest()[:12]
+    return f"{layer}-{digest}.geojson"
+
+
+def ogr_to_geojson(gpkg: Path, layer: str, where: str, workdir: Path) -> dict:
+    out = workdir / ogr_cache_name(layer, where)
     if not out.exists():
         tmp = out.with_name(out.name + ".part")
         tmp.unlink(missing_ok=True)
@@ -177,8 +195,8 @@ def load_admin_express(workdir: Path) -> tuple[dict[str, dict], dict[str, tuple[
     gpkg = next(extract_dir.rglob("*.gpkg"))
     deps = ",".join(f"'{d}'" for d in DEPARTMENTS)
     where = f"code_insee_du_departement IN ({deps})"
-    communes = ogr_to_geojson(gpkg, "commune", where, workdir / "communes-raw.geojson")
-    chefs = ogr_to_geojson(gpkg, "chef_lieu_de_commune", "code_insee_de_la_commune IS NOT NULL", workdir / "chefs-lieux.geojson")
+    communes = ogr_to_geojson(gpkg, "commune", where, workdir)
+    chefs = ogr_to_geojson(gpkg, "chef_lieu_de_commune", "code_insee_de_la_commune IS NOT NULL", workdir)
     by_insee = {f["properties"]["code_insee"]: f for f in communes["features"]}
     points = {}
     for f in chefs["features"]:
@@ -215,8 +233,13 @@ def distance_km(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 def prepare_osrm(workdir: Path, bbox: tuple[float, float, float, float]) -> Path:
     """Merge the extracts, clip them to bbox (to fit in memory), and build the MLD graph."""
-    pbfs = [download(GEOFABRIK.format(r), workdir / "downloads" / f"{r}-latest.osm.pbf") for r in REGIONS]
-    osrm_dir = workdir / "osrm-{:.2f}_{:.2f}_{:.2f}_{:.2f}".format(*bbox)
+    pbfs = [
+        download(GEOFABRIK.format(r), workdir / "downloads" / f"{r}-latest.osm.pbf", EXTRACT_MAX_AGE_DAYS)
+        for r in REGIONS
+    ]
+    # The graph is keyed on the bbox and the extracts it was built from.
+    key = repr((bbox, [(p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in pbfs]))
+    osrm_dir = workdir / f"osrm-{hashlib.sha256(key.encode()).hexdigest()[:12]}"
     graph = osrm_dir / "area.osrm"
     if (osrm_dir / "READY").exists():
         return graph

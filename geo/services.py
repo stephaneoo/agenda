@@ -21,13 +21,21 @@ def travel_minutes(origin: str, dest: str) -> int | None:
 
 
 def reachable(origin: str, within: int) -> set[str]:
-    """Covered communes at most `within` minutes from origin. The origin is always included."""
+    """Covered communes at most `within` minutes from origin. The origin is always included.
+
+    0 means the origin alone (spec), even if the matrix rounds a neighbour to 0 minutes.
+    """
+    if within == 0:
+        return {origin}
     dests = TravelTime.objects.filter(origin_id=origin, minutes__lte=within).values_list("destination_id", flat=True)
     return {origin, *dests}
 
 
 def normalize_name(name: str) -> str:
-    """'Saint-Maurice-sur-Eygues', 'ST MAURICE SUR EYGUES' and 'saint maurice sur eygues' all match."""
+    """'Saint-Maurice-sur-Eygues', 'ST MAURICE SUR EYGUES' and 'saint maurice sur eygues' all match,
+    and so do 'Les Pilles' and the sorted-list form 'Pilles (Les)'."""
+    if m := re.fullmatch(r"\s*(.+?)\s*\(\s*([^()]+?)\s*\)\s*", name):
+        name = f"{m[2]} {m[1]}"
     text = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().casefold()
     words = re.sub(r"[^a-z0-9]+", " ", text).split()
     return " ".join({"st": "saint", "ste": "sainte"}.get(w, w) for w in words)
@@ -52,16 +60,18 @@ def _match_name(candidates: list[Commune], postal_code: str | None, name: str | 
 def resolve_commune(lat: float | None, lon: float | None, postal_code: str | None, name: str | None) -> str | None:
     """The INSEE code of the commune a location is in, or None when it can't be told.
 
-    The point decides when it lands in a known commune. Otherwise (no point, or a point
-    outside every loaded commune) postcode and name must both match exactly one commune.
-    A postcode alone never decides: several communes share one.
+    A valid point decides, by the commune it lands in. One outside every loaded commune
+    gives None: the neighbours of the area are loaded, so such a point is outside the area
+    or wrong, and is not guessed. Only when the point is missing or invalid do postcode and
+    name have to match exactly one commune. A postcode alone never decides: several
+    communes share one.
     """
     if _valid_point(lat, lon):
         hits = list(Commune.objects.filter(geom__intersects=Point(lon, lat, srid=4326)))
         if len(hits) == 1:
             return hits[0].insee
-        if hits:  # on a shared border: the address breaks the tie, or nothing does
-            return _match_name(hits, postal_code, name)
+        # On a shared border the address breaks the tie, or nothing does.
+        return _match_name(hits, postal_code, name)
     if not postal_code:
         return None
     return _match_name(list(Commune.objects.filter(postal_codes__contains=[postal_code])), postal_code, name)
@@ -69,7 +79,9 @@ def resolve_commune(lat: float | None, lon: float | None, postal_code: str | Non
 
 def matrix_payload() -> dict:
     """The covered area's matrix, as served by /api/v1/travel-times."""
-    info = MatrixInfo.objects.get()
+    info = MatrixInfo.objects.first()
+    if info is None:
+        return {"version": None, "communes": [], "minutes": []}
     communes = list(CoveredArea.objects.order_by("insee").values_list("insee", flat=True))
     index = {insee: i for i, insee in enumerate(communes)}
     minutes: list[list[int | None]] = [[None] * len(communes) for _ in communes]
