@@ -71,11 +71,20 @@ class FakeSession:
     """Answers every query with the same pages: pages[n - 1] for page=n. A page may be an
     exception instance, which is raised, as a network error would be."""
 
-    def __init__(self, pages: list[Any]) -> None:
+    def __init__(self, pages: list[Any], versions: list[str] | None = None) -> None:
         self.pages = pages
-        self.calls: list[dict] = []
+        self.calls: list[dict] = []  # data pages only
+        # Answers to the export's version checks (resource last_modified, tabular created_at),
+        # in call order; the same version throughout when not given.
+        self.versions = list(versions or [])
 
     def get(self, url: str, params: dict | None = None, timeout: float | None = None) -> FakeResponse:
+        from ingest.datatourisme import client
+
+        if url in (client.RESOURCE_META_URL, client.TABULAR_META_URL):
+            version = self.versions.pop(0) if self.versions else "2026-10-25T03:47:44.904000+00:00"
+            body = {"resource": {"last_modified": version}} if url == client.RESOURCE_META_URL else {"created_at": version}
+            return FakeResponse(200, body)
         params = dict(params or {})
         self.calls.append(params)
         n = int(params.get("page", 1))

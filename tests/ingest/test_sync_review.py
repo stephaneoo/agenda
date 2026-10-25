@@ -118,7 +118,7 @@ def test_area_queries_cover_the_area_and_overlapping_queries_are_deduplicated(cl
     session = FakeSession(pages_of(rows))  # every query answers the same rows
     result = sync.run(session=session, queries=queries)
     assert result.fetched_rows == 5 * len(queries) and result.added == 5
-    assert len(session.calls) == len(queries)
+    assert len(session.calls) == 2 * len(queries)  # page 1, then page 1 again to check
 
 
 def test_a_server_capped_page_size_is_followed(clock) -> None:
@@ -178,3 +178,42 @@ def test_allow_mass_withdrawal_and_drift_warning(clock) -> None:
     clock.now = NOW + timedelta(days=3)
     small = run(rows[:4] + many)  # 1 of 45 (2 %): no warning
     assert small.withdrawn == 1 and "withdrew" not in small.summary()
+
+
+# --- M1: the export replaced during the run ---------------------------------------------------
+
+class SwitchingSession(FakeSession):
+    """Serves `v1` pages for the first `switch_after` page requests, then `v2`: the export
+    replaced mid-run by one with the same total."""
+
+    def __init__(self, v1, v2, switch_after: int) -> None:
+        super().__init__(v1)
+        self.v2, self.switch_after = v2, switch_after
+
+    def get(self, url, params=None, timeout=None):
+        if len(self.calls) >= self.switch_after:
+            self.pages = self.v2
+        return super().get(url, params, timeout)
+
+
+def test_same_total_shift_mid_pagination_fails_and_withdraws_nothing(clock) -> None:
+    v1 = [row(i, "2026-11-10<->2026-11-10") for i in range(30)]
+    run(pages_of(v1, 25))
+    clock.now = NOW + timedelta(days=1)
+    v2 = v1[1:] + [row(99, "2026-11-10<->2026-11-10")]  # one deleted, one added: same total
+    result = sync.run(session=SwitchingSession(pages_of(v1, 25), pages_of(v2, 25), 1), queries=[{}])
+    assert result.status == "failed" and result.withdrawn == 0
+    assert "changed during" in result.error
+    assert all(o.shown for o in Occurrence.objects.all())
+
+
+def test_export_version_changing_during_the_run_fails(clock) -> None:
+    rows = [row(i, "2026-11-10<->2026-11-10") for i in range(10)]
+    run(rows)
+    clock.now = NOW + timedelta(days=1)
+    moved = FakeSession(pages_of(rows[:9]), versions=["2026-10-25T03:47:44+00:00", "t1", "2026-10-26T03:40:00+00:00", "t1"])
+    result = sync.run(session=moved, queries=[{}])
+    assert result.status == "failed" and result.withdrawn == 0 and "changed during" in result.error
+    assert all(o.shown for o in Occurrence.objects.all())
+    same = FakeSession(pages_of(rows[:9]), versions=["v", "t", "v", "t"])
+    assert sync.run(session=same, queries=[{}]).withdrawn == 1

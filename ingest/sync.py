@@ -164,6 +164,7 @@ def _sync(result: SyncRun, session: Any, queries: list[dict[str, str]], started:
     present: set[str] = set()  # events the source still has in (or possibly in) the area
     written: dict[str, set[str]] = {}  # event key -> the occurrence keys it now lists
 
+    version = client.source_version(session)
     for raw in client.iter_rows(session, queries):
         result.fetched_rows += 1
         key, ext_id = parse.event_key(raw), parse.external_id(raw)
@@ -230,6 +231,8 @@ def _sync(result: SyncRun, session: Any, queries: list[dict[str, str]], started:
         else:
             result.updated += 1
 
+    if client.source_version(session) != version:
+        raise client.FetchError("the export changed during the run (new version upstream)")
     # Every page came: the run is complete, and what's missing is gone at the source.
     drops: dict[str, list[str]] = {}
     for event, occurrences in before.items():
