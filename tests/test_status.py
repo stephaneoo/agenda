@@ -38,3 +38,51 @@ def test_record_replaces_a_corrupt_file_and_refuses_bad_outcomes(path) -> None:
         status.record("restore-test", "fine", "")
     with pytest.raises(ValueError):
         status.record("../etc", "ok", "")
+
+
+# --- Batch C security review ---------------------------------------------------------------------
+
+def test_a_deeply_nested_file_reads_as_corrupt(path) -> None:
+    path.write_text("[" * 100_000 + "]" * 100_000)
+    assert status.read() == {"version": 1, "jobs": {}}
+    status.record("sync-datatourisme", "ok", "fine")
+    assert json.loads(path.read_text())["jobs"]["sync-datatourisme"]["outcome"] == "ok"
+
+
+def test_the_lock_is_never_followed_through_a_symlink(path, tmp_path) -> None:
+    victim = tmp_path / "victim"
+    victim.write_text("keep me")
+    (tmp_path / "status.json.lock").symlink_to(victim)
+    with pytest.raises(OSError):
+        status.record("sync-datatourisme", "ok", "fine")
+    assert victim.read_text() == "keep me" and not path.exists()
+
+
+def test_a_world_writable_directory_is_refused(settings, tmp_path, caplog) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    settings.STATUS_FILE = str(shared / "status.json")
+    status.record("sync-datatourisme", "ok", "fine")
+    assert not (shared / "status.json").exists() and not (shared / "status.json.lock").exists()
+    assert "world-writable" in caplog.text
+
+
+def test_the_directory_is_created_0750_and_the_lock_0600(settings, tmp_path) -> None:
+    import os
+    import stat
+
+    old = os.umask(0o022)
+    try:
+        settings.STATUS_FILE = str(tmp_path / "state" / "status.json")
+        status.record("sync-datatourisme", "ok", "fine")
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE((tmp_path / "state").stat().st_mode) == 0o750
+    assert stat.S_IMODE((tmp_path / "state" / "status.json.lock").stat().st_mode) == 0o600
+
+
+def test_the_summary_has_no_c1_or_bidi_controls(path) -> None:
+    status.record("sync-datatourisme", "ok", "ok\x85 \x9b31m‮evil‬ ⁦x⁩ ‎y‏؜")
+    summary = json.loads(path.read_text())["jobs"]["sync-datatourisme"]["summary"]
+    assert summary == "ok 31m evil x y"
