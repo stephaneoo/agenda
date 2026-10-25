@@ -67,6 +67,7 @@ INSTALLED_APPS = [
     "django.contrib.gis",
     "geo",
     "claims",
+    "agenda",
 ]
 
 MIDDLEWARE = [

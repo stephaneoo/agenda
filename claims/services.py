@@ -31,7 +31,7 @@ def _project(event_key: str) -> None:
     project_event(event_key)
 
 
-def _lock(event_key: str) -> None:
+def lock_event(event_key: str) -> None:
     """Serialise writers of one event until the transaction ends."""
     with connection.cursor() as cursor:
         cursor.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", [event_key])
@@ -68,7 +68,7 @@ def write_claims(event_key: str, claims: list[NewClaim]) -> None:
         _check(event_key, claim, sources)
     now = timezone.now()
     with transaction.atomic():
-        _lock(event_key)
+        lock_event(event_key)
         changed = False
         for claim in claims:
             value = _json(claim.value)
@@ -100,7 +100,7 @@ def delete_claim(target_type: str, target_key: str, field: str, source: str) -> 
     if event_key is None:
         raise ValueError(f"malformed target: {target_type} {target_key!r}")
     with transaction.atomic():
-        _lock(event_key)
+        lock_event(event_key)
         claim = (
             Claim.objects.select_for_update()
             .filter(target_type=target_type, target_key=target_key, field=field, source_id=source)

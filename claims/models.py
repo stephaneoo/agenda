@@ -52,7 +52,8 @@ class Claim(models.Model):
     # An event key ("datatourisme:<id>"), or an occurrence key "<event key>/<YYYY-MM-DD>".
     target_key = models.CharField(max_length=250)
     field = models.CharField(max_length=40)
-    value = models.JSONField()
+    # SQL NULL stands for a JSON null: "the source says there is none".
+    value = models.JSONField(null=True)
     source = models.ForeignKey(Source, on_delete=models.PROTECT)
     seen_at = models.DateTimeField()
 
@@ -81,7 +82,7 @@ class ClaimHistory(models.Model):
     target_type = models.CharField(max_length=10, choices=TARGET_TYPES)
     target_key = models.CharField(max_length=250)
     field = models.CharField(max_length=40)
-    value = models.JSONField()
+    value = models.JSONField(null=True)
     source = models.ForeignKey(Source, on_delete=models.PROTECT)
     seen_at = models.DateTimeField()
     replaced_at = models.DateTimeField()
