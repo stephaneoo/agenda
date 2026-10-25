@@ -15,11 +15,11 @@
     <dt>Catégorie</dt>
     <dd>{{ row.category_label }}</dd>
     {% if event.organizer %}<dt>Organisateur</dt>
-    <dd>{% if event.organizer.url %}<a href="{{ event.organizer.url }}" rel="nofollow noopener">{{ event.organizer.name }}</a>{% else %}{{ event.organizer.name }}{% endif %}</dd>{% endif %}
+    <dd>{% if event.organizer.url %}<a href="{{ event.organizer.url }}" rel="nofollow noopener noreferrer ugc">{{ event.organizer.name }}</a>{% else %}{{ event.organizer.name }}{% endif %}</dd>{% endif %}
     {% if event.offers %}<dt>Tarif</dt>
-    <dd>{% if event.offers.is_free %}Gratuit{% elif event.offers.price %}{{ event.offers.price }}{% else %}Payant{% endif %}{% if event.offers.url %} · <a href="{{ event.offers.url }}" rel="nofollow noopener">billetterie</a>{% endif %}</dd>{% endif %}
+    <dd>{% if event.offers.is_free %}Gratuit{% elif event.offers.price %}{{ event.offers.price }}{% else %}Payant{% endif %}{% if event.offers.url %} · <a href="{{ event.offers.url }}" rel="nofollow noopener noreferrer ugc">billetterie</a>{% endif %}</dd>{% endif %}
   </dl>
   {% if event.description %}<div class="description">{{ event.description|linebreaks }}</div>{% endif %}
-  <p class="attribution">{% for s in sources %}Source : {% if s.url %}<a href="{{ s.url }}" rel="nofollow noopener">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %} ({{ s.licence }}), mise à jour le {{ s.updated|date:"j F Y" }}.{% if not forloop.last %} {% endif %}{% endfor %}</p>
+  <p class="attribution">{% for s in sources %}Source : {% if s.url %}<a href="{{ s.url }}" rel="nofollow noopener noreferrer ugc">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %} ({{ s.licence }}), mise à jour le {{ s.updated|date:"j F Y" }}.{% if not forloop.last %} {% endif %}{% endfor %}</p>
 </article>
 {% endblock %}

@@ -74,6 +74,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "agenda_site.csp.ContentSecurityPolicyMiddleware",
     "api.problems.CorsMiddleware",
     "api.problems.ProblemErrorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

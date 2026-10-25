@@ -170,11 +170,21 @@ def _migrations_applied() -> bool:
     return set(loader.graph.nodes) <= set(loader.applied_migrations)
 
 
+# Only a request from the host itself sees the details. Caddy reaches gunicorn over a Unix
+# socket, where gunicorn sets REMOTE_ADDR to "" (no peer address), so a request through Caddy
+# is never one of these, whatever headers it carries. On the host, gunicorn also listens on
+# loopback for the deploy's check (plan, Tasks 14 and 16).
+LOOPBACK = {"127.0.0.1", "::1"}
+
+
 @never_cache
 @require_safe
 def healthz(request: HttpRequest) -> JsonResponse:
-    """200 iff the database answers and every migration is applied. `debug` lets the deploy
-    refuse a production that runs with DEBUG on."""
+    """200 iff the database answers and every migration is applied, 503 otherwise.
+
+    From loopback, the body says why, and `debug` lets the deploy refuse a production that
+    runs with DEBUG on. Anyone else gets {"status": "ok"} or {"status": "unavailable"}.
+    """
     database = migrations = False
     try:
         with connection.cursor() as cursor:
@@ -184,5 +194,8 @@ def healthz(request: HttpRequest) -> JsonResponse:
     except DatabaseError:
         pass
     ok = database and migrations
+    status = 200 if ok else 503
+    if request.META.get("REMOTE_ADDR") not in LOOPBACK:
+        return JsonResponse({"status": "ok" if ok else "unavailable"}, status=status)
     body = {"status": "ok" if ok else "error", "database": database, "migrations": migrations, "debug": settings.DEBUG}
-    return JsonResponse(body, status=200 if ok else 503)
+    return JsonResponse(body, status=status)
