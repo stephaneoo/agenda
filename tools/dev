@@ -12,14 +12,64 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 host="root@$(cat "$root/.secrets/dev-ip")"
 remote_dir=/srv/agenda
-ssh_opts=(-i "$root/.secrets/agenda_ed25519" -o "UserKnownHostsFile=$root/.secrets/known_hosts" -o BatchMode=yes -o ConnectTimeout=15)
+# ssh splits UserKnownHostsFile on whitespace (it takes a list), hence the inner quotes.
+ssh_opts=(-i "$root/.secrets/agenda_ed25519" -o "UserKnownHostsFile=\"$root/.secrets/known_hosts\"" -o BatchMode=yes -o ConnectTimeout=15)
+# rsync splits -e on whitespace. It honours quotes but not backslashes (2.6.9 on macOS),
+# so printf %q won't do: single-quote each word, for a repo path with spaces.
+rsync_ssh=ssh
+for word in "${ssh_opts[@]}"; do
+  case "$word" in *"'"*) echo "tools/dev: the repo path must not contain a single quote" >&2; exit 1 ;; esac
+  rsync_ssh+=" '$word'"
+done
 nix_env='. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+# Second layer behind .gitignore: these never leave the laptop, whatever git says.
+never_send=(--exclude .env --exclude '.env.*' --exclude .secrets/ --exclude .claude/)
+
+# The files to send, NUL-separated: what git tracks or would track (untracked but not
+# ignored), minus files deleted from the working tree, minus the never_send paths.
+file_list() {
+  git -C "$root" ls-files -z --cached --others --exclude-standard | sort -zu |
+    while IFS= read -r -d '' f; do
+      case "/$f" in */.env | */.env.* | /.secrets/* | /.claude/*) continue ;; esac
+      if [ -e "$root/$f" ] || [ -L "$root/$f" ]; then printf '%s\0' "$f"; fi
+    done
+}
 
 sync_tree() {
-  rsync -az --delete \
-    --exclude .env --exclude .secrets/ --exclude .claude/ \
-    --exclude result --exclude 'result-*' --exclude .direnv/ --exclude __pycache__/ \
-    -e "ssh ${ssh_opts[*]}" "$root/" "$host:$remote_dir/"
+  local list
+  list=$(mktemp)
+  file_list >"$list"
+  rsync -az "${never_send[@]}" --from0 --files-from="$list" -e "$rsync_ssh" "$root/" "$host:$remote_dir/"
+  # The flake and the migration check need the git metadata.
+  rsync -az --delete -e "$rsync_ssh" "$root/.git/" "$host:$remote_dir/.git/"
+  # Files deleted on the laptop: remove from the VM whatever git there tracks or would
+  # track but the list doesn't name. Ignored files (caches, infra/.terraform/) stay.
+  # shellcheck disable=SC2016
+  ssh "${ssh_opts[@]}" "$host" "cd $remote_dir && "'
+    keep=$(mktemp) && trap "rm -f $keep" EXIT && sort -zu >"$keep" &&
+    git -c safe.directory="$PWD" ls-files -z --cached --others --exclude-standard | sort -zu |
+      comm -z -23 - "$keep" |
+      while IFS= read -r -d "" f; do
+        case "$f" in .git/* | infra/.terraform/* | */.terraform/*) continue ;; esac
+        rm -f -- "$f"
+      done' <"$list"
+  rm -f "$list"
+}
+
+# KEY=value lines of an env file, as `export KEY=<shell-quoted value>`, for SCW_* keys only.
+# Nothing in the file is evaluated: CR stripped, optional `export`, one pair of quotes removed.
+scw_exports() {
+  local line name value
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?(SCW_[A-Z0-9_]+)=(.*)$ ]] || continue
+    name=${BASH_REMATCH[2]}
+    value=${BASH_REMATCH[3]}
+    if [[ $value =~ ^\"(.*)\"$ || $value =~ ^\'(.*)\'$ ]]; then
+      value=${BASH_REMATCH[1]}
+    fi
+    printf 'export %s=%q\n' "$name" "$value"
+  done <"$1"
 }
 
 case "${1:-}" in
@@ -32,15 +82,35 @@ case "${1:-}" in
     # Like run, with the SCW_* variables from .env exported for this one command.
     # They travel over stdin, so they appear in no remote file and no process list.
     shift
+    env_file=${AGENDA_DEV_ENV_FILE:-$root/.env}
+    exports=$(scw_exports "$env_file")
+    for required in SCW_ACCESS_KEY SCW_SECRET_KEY; do
+      if ! grep -q "^export $required=." <<<"$exports"; then
+        echo "tools/dev: $required is missing or empty in $env_file" >&2
+        exit 1
+      fi
+    done
     sync_tree
-    { grep -E '^SCW_[A-Z_]+=' "$root/.env" | sed 's/^/export /'
-      printf '%s\ncd %s && %s\n' "$nix_env" "$remote_dir" "$*"
-    } | ssh "${ssh_opts[@]}" "$host" 'bash -s'
+    printf '%s\n%s\ncd %s && %s\n' "$exports" "$nix_env" "$remote_dir" "$*" | ssh "${ssh_opts[@]}" "$host" 'bash -s'
     ;;
   pull)
+    # One file at a time over ssh, without rsync (the Mac's rsync 2.6.9 trusts the sender
+    # with the file list). Paths are relative to the repo, outside .git/.
     shift
     for path in "$@"; do
-      rsync -az -e "ssh ${ssh_opts[*]}" "$host:$remote_dir/$path" "$root/$path"
+      case "/$path/" in
+        //* | */../* | */./* | */.git/*) echo "tools/dev: refusing to pull '$path'" >&2; exit 1 ;;
+      esac
+      dest="$root/$path"
+      mkdir -p "$(dirname "$dest")"
+      tmp=$(mktemp "$dest.pull.XXXXXX")
+      if ! ssh "${ssh_opts[@]}" "$host" "cat -- $(printf '%q' "$remote_dir/$path")" >"$tmp"; then
+        rm -f "$tmp"
+        echo "tools/dev: could not pull '$path'" >&2
+        exit 1
+      fi
+      if [ -x "$dest" ]; then chmod 755 "$tmp"; else chmod 644 "$tmp"; fi
+      mv -f "$tmp" "$dest"
     done
     ;;
   ssh)

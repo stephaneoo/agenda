@@ -12,3 +12,14 @@ __pycache__/
 *.pyc
 .pytest_cache/
 staticfiles/
+.env.*
+keys.txt
+*.agekey
+*.key
+*.dec.yaml
+secrets/*.plain*
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfplan
+crash.log
