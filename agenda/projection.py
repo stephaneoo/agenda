@@ -23,6 +23,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -256,7 +257,8 @@ def _final_targets(event_key: str, moves: dict[str, str], known: set[str]) -> di
         if k in seen:
             in_cycle |= set(path[seen[k]:])
     if in_cycle:
-        logger.warning("projection: %s: moved_to cycle ignored: %s", event_key, ", ".join(sorted(in_cycle)))
+        # %r: keys come from sources, and a newline in one must not forge a log line.
+        logger.warning("projection: %r: moved_to cycle ignored: %r", event_key, sorted(in_cycle))
     finals = {}
     for start in moves:
         if start in in_cycle:
@@ -307,18 +309,31 @@ def _project(event_key: str, claims: list[Claim], now: datetime) -> None:
         row.delete()
 
 
-def rebuild_all() -> int:
+@dataclass(frozen=True)
+class Rebuild:
+    count: int  # event keys with claims
+    failed: list[str]  # event keys whose projection raised, in the order tried
+
+
+def rebuild_all() -> Rebuild:
     """Reproject every event from its claims, and drop canonical rows with no claims left.
 
     One transaction per event, under that event's lock, so the rebuild never holds more than
     one event at a time. Unchanged rows are left as they are, updated_at included. Run it
-    after any change to the Source table (priorities, labels, licences). Returns the number
-    of event keys with claims.
+    after any change to the Source table (priorities, labels, licences).
+
+    An event that fails is logged and left as it was (its transaction rolled back), and the
+    rebuild carries on with the next one; the failed keys come back in `failed`.
     """
     keys = set(Claim.objects.exclude(event_key="").values_list("event_key", flat=True).distinct())
-    for key in sorted(keys):
-        project_event(key)
-    for stale in [k for k in Event.objects.values_list("key", flat=True) if k not in keys]:
-        # project_event reads the claims again under the lock: if one arrived since, it stays.
-        project_event(stale)
-    return len(keys)
+    # project_event reads the claims again under the lock: if one arrived since, a stale
+    # event stays.
+    stale = [k for k in Event.objects.values_list("key", flat=True) if k not in keys]
+    failed = []
+    for key in [*sorted(keys), *stale]:
+        try:
+            project_event(key)
+        except Exception:
+            logger.exception("rebuild: %r failed, carrying on", key)
+            failed.append(key)
+    return Rebuild(len(keys), failed)
