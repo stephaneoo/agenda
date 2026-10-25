@@ -1,0 +1,10 @@
+.env
+
+.secrets/
+*.pem
+id_*
+!*.pub
+result
+result-*
+.direnv/
+__pycache__/
