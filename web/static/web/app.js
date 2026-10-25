@@ -197,6 +197,7 @@ async function main() {
   let offline = false;
   try {
     snapshot = await download();
+    document.documentElement.dataset.offlineCopy = "saved"; // for the e2e check, and DevTools
   } catch (e) {
     offline = true;
     snapshot = await loadSnapshot();

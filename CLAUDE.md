@@ -11,6 +11,11 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
 - `nix develop`: dev shell with Python, Django, pytest, PostgreSQL + PostGIS and uv.
 - `nix develop -c pytest [path]`: run tests. `pytest` in the shell starts an ephemeral PostGIS
   (`nix/postgis-fixture.sh`) unless `DATABASE_URL` is already set.
+- `nix run .#e2e` (Linux only): offline reading end to end in headless Chromium (Playwright from
+  nixpkgs): seeds an ephemeral PostGIS (`tools/e2e_seed.py`), runs the app on 127.0.0.1:8765, goes
+  offline, checks the banner, the filters against the shared cases, cached and IndexedDB-rendered
+  occurrence pages, and that nothing violates the CSP. `nix run .#check` runs it last on Linux; on
+  a Mac it is skipped (run it on the dev VM).
 - `nix run .#check`: every check the deploy runs: `nix flake check -L` (pytest, OpenAPI diff,
   `manage.py check --deploy` on production settings, uv.lock sources limited to PyPI, see
   `nix/checks.nix`), then `nix run .#check-migrations`, the expand/contract lint against the latest

@@ -98,13 +98,41 @@
               python -m tools.check_openapi_version "$@"
             '';
           };
-          # Everything the deploy runs: the sandboxed flake checks, then the git-aware ones.
+          # Offline reading end to end, in headless Chromium (Linux only: nixpkgs' Playwright
+          # browsers). Starts its own PostGIS and app; needs no network.
+          e2ePython = pkgs.python312.withPackages (p: [ p.playwright ]);
+          e2e = pkgs.writeShellApplication {
+            name = "e2e";
+            runtimeInputs = [
+              venv
+              postgisFixture
+              e2ePython
+              pkgs.git
+              pkgs.coreutils
+            ];
+            text = ''
+              ${lib.concatStrings (lib.mapAttrsToList (k: v: "export ${k}=${v}\n") geoEnv)}
+              export AGENDA_DEV=1
+              export PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}
+              export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true
+              # Chromium aborts without a font configuration.
+              export FONTCONFIG_FILE=${pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; }}
+              status_dir=$(mktemp -d)
+              trap 'rm -rf "$status_dir"' EXIT
+              export AGENDA_STATUS_FILE="$status_dir/status.json"
+              cd "$(git rev-parse --show-toplevel)"
+              postgis-fixture ${e2ePython}/bin/python -I tools/e2e_offline.py ${venv}/bin/python
+            '';
+          };
+          # Everything the deploy runs: the sandboxed flake checks, then the git-aware ones,
+          # then (on Linux) the browser check.
           checkAll = pkgs.writeShellApplication {
             name = "check";
             runtimeInputs = [ checkMigrations ];
             text = ''
               nix flake check -L
               check-migrations
+              ${lib.optionalString pkgs.stdenv.isLinux "${e2e}/bin/e2e"}
             '';
           };
           travelMatrix = import ./nix/travel-matrix.nix { inherit lib pkgs venv geoEnv; };
@@ -126,6 +154,7 @@
             pytestShim
             checkMigrations
             checkAll
+            e2e
             travelMatrix
             nodejs
             fakeIndexeddb
@@ -139,7 +168,15 @@
         postgis-fixture = perSystem.${system}.postgisFixture;
       });
 
-      apps = forAllSystems (system: {
+      apps = forAllSystems (
+        system:
+        lib.optionalAttrs nixpkgs.legacyPackages.${system}.stdenv.isLinux {
+          e2e = {
+            type = "app";
+            program = "${perSystem.${system}.e2e}/bin/e2e";
+          };
+        }
+        // {
         check-migrations = {
           type = "app";
           program = "${perSystem.${system}.checkMigrations}/bin/check-migrations";
@@ -152,7 +189,8 @@
           type = "app";
           program = "${perSystem.${system}.travelMatrix}/bin/travel-matrix";
         };
-      });
+        }
+      );
 
       checks = forAllSystems (
         system:
