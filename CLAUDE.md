@@ -26,10 +26,9 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
   `nix run .#check` fails when the spec changed since the last `deploy-*` tag without a new
   `info.version` (`tools/check_openapi_version.py`).
 - `python manage.py rebuild_projection`: rebuild the canonical `Event`/`Occurrence` tables from
-  the claims, one event per transaction. Write claims only through
-  `claims.services.write_claims` / `delete_claim`; the canonical models refuse writes outside
-  `agenda.models.projection_writer()`. Run it after **any change to the `Source` table**
-  (priority, label, licence, external): those don't reproject by themselves.
+  the claims, one event per transaction. An event that fails is logged and skipped; the command
+  then exits non-zero and names the failed keys. Run it after **any change to the `Source`
+  table** (priority, label, licence, external): those don't reproject by themselves.
 - **Never wrap many `write_claims` calls in one outer transaction** (e.g. a whole sync run):
   each call takes its event's lock until the transaction ends. One event, one transaction.
 - Accepted v1 edge case: the cutoff for a `listed: false` claim (a drop after the occurrence
@@ -42,6 +41,22 @@ On the Mac laptop without Nix, run commands on the dev VM: `tools/dev run '<comm
 generated files back with `tools/dev pull <path>`. The sync sends what `git ls-files` lists
 (tracked, plus untracked but not ignored) and deletes on the VM what is gone locally. Flakes only see files tracked by git, so
 `git add` new files before running Nix.
+
+## Conventions
+
+- Write claims only through `claims.services.write_claims` / `delete_claim` (the admin and
+  moderation: `moderation_write` / `moderation_delete`, source `moderation` only). `Claim` and
+  `ClaimHistory` refuse writes outside `claims.models.claims_writer()`, the canonical models
+  outside `agenda.models.projection_writer()`.
+- **Never use raw SQL (`cursor.execute`) or `QuerySet._raw_delete()` on the canonical or claims
+  tables.** The write guards can't see them. Accepted for v1; reads through the ORM are fine.
+- `write_claims` and `delete_claim` raise `ValueError` for any bad input, database and date
+  overflow errors included (chained). That is the only exception a caller catches per event.
+- `agenda.fields.problem()` must stay total over the projection: any value it accepts, the
+  projection can store. Change both together, and keep `tests/agenda/test_fields_total.py`
+  generating the new cases. Bounds: years 1912–2200, INSEE communes, `seen_at` at most 5 min
+  in the future, strings capped (name 300, description 10,000, URLs 2,000, others 300).
+- Log untrusted values (event keys, source data) with `%r`, never `%s`.
 
 ## Environment
 
