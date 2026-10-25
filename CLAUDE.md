@@ -77,6 +77,11 @@ generated files back with `tools/dev pull <path>`. The sync sends what `git ls-f
 - The admin (`agenda/admin.py`) is read-only on `Event`/`Occurrence`; moderators act on each
   object's "Modérer" page, which calls `agenda.moderation` (hide and restore both take a reason).
   Saving a `Source` there reprojects everything after the admin's transaction commits.
+- Accepted for v1: saving a `Source` in the admin runs `rebuild_all()` synchronously in that
+  request (seconds for the area's few hundred events). If it grows, move it to a job.
+- Accepted for v1: a moved occurrence's target is moderation-owned (its `listed: true` is a
+  moderation claim). If the source later drops the whole event, the target stays shown: hide it
+  by hand.
 - Admin logins are throttled by django-axes (5 failures per username and address, 1 h). Unlock:
   `python manage.py axes_reset_username <name>`. Sessions last 8 h.
 
