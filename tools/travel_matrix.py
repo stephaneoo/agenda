@@ -6,6 +6,11 @@ Downloads the Geofabrik extracts and IGN ADMIN EXPRESS COG, routes with OSRM's c
 profile between communes' chef-lieu points, keeps the communes within --minutes of
 --origin, and writes the two files that `manage.py load_geo` reads. Downloads and OSRM
 files are cached in --workdir. The Nix app provides osmium, osrm-*, ogr2ogr and 7z.
+
+Downloads are HTTPS only, from the hosts in DOWNLOAD_HOSTS. The ADMIN EXPRESS archive is
+pinned by sha256, and Geofabrik extracts are checked against their published .md5. When run
+as root (the dev VM), every external tool runs as nobody, and the default workdir is
+/var/cache/agenda-travel-matrix, owned by nobody.
 """
 
 from __future__ import annotations
@@ -38,13 +43,20 @@ ADMIN_EXPRESS = (
     "https://data.geopf.fr/telechargement/download/ADMIN-EXPRESS-COG/"
     f"{ADMIN_EXPRESS_EDITION}/{ADMIN_EXPRESS_EDITION}.7z"
 )
+# IGN publishes no checksum for it. This is the archive downloaded over HTTPS on 2026-10-25;
+# a new edition means a new pin.
+ADMIN_EXPRESS_SHA256 = "688eb44505d9b4a8e422ded2f4afaac799f10783de563132ca1a60e9491c6278"
 # La Poste's official postcode base: INSEE code -> postcodes. Admin Express has none.
+# The endpoint always serves the latest file, so it can't be pinned.
 LAPOSTE_POSTCODES = "https://data.laposte.fr/data-fair/api/v1/datasets/laposte-hexasmal/raw"
+DOWNLOAD_HOSTS = {"download.geofabrik.de", "data.geopf.fr", "data.laposte.fr"}
 # Drôme, Vaucluse and their neighbouring departments.
 DEPARTMENTS = ["26", "84", "04", "05", "07", "13", "30", "38"]
 OSRM_PORT = 5917
 # Geofabrik's *-latest files change daily; a week-old copy is refreshed.
 EXTRACT_MAX_AGE_DAYS = 7
+NOBODY = 65534
+ROOT_WORKDIR = Path("/var/cache/agenda-travel-matrix")
 
 
 @dataclass(frozen=True)
@@ -143,9 +155,79 @@ def log(msg: str) -> None:
     print(f"[travel-matrix {datetime.now():%H:%M:%S}] {msg}", file=sys.stderr, flush=True)
 
 
+def unprivileged_prefix(euid: int) -> list[str]:
+    """What to put before a command so that it doesn't run as root.
+
+    The tools parse untrusted downloads (7z archives, PBF, GeoPackage); as nobody, a bug in
+    one of them can at worst spoil the workdir.
+    """
+    if euid != 0:
+        return []
+    return ["setpriv", f"--reuid={NOBODY}", f"--regid={NOBODY}", "--clear-groups"]
+
+
+def tool(*cmd: str | Path) -> list[str]:
+    return unprivileged_prefix(os.geteuid()) + [str(c) for c in cmd]
+
+
 def run(*cmd: str | Path) -> None:
     log(" ".join(str(c) for c in cmd))
-    subprocess.run([str(c) for c in cmd], check=True)
+    subprocess.run(tool(*cmd), check=True)
+
+
+def make_dir(path: Path) -> Path:
+    """mkdir -p, owned by nobody when running as root, so the tools can write in it."""
+    path.mkdir(parents=True, exist_ok=True)
+    if os.geteuid() == 0:
+        os.chown(path, NOBODY, NOBODY)
+    return path
+
+
+class ChecksumError(Exception):
+    pass
+
+
+def check_url(url: str) -> None:
+    """Raise ValueError unless url is plain https:// on one of DOWNLOAD_HOSTS."""
+    parts = urllib.parse.urlsplit(url)
+    if (
+        parts.scheme != "https"
+        or parts.hostname not in DOWNLOAD_HOSTS
+        or parts.username is not None
+        or parts.password is not None
+        or parts.port is not None
+    ):
+        raise ValueError(f"refusing to download {url!r}")
+
+
+def _digest(path: Path, algorithm: str) -> str:
+    h = hashlib.new(algorithm)
+    with path.open("rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_sha256(path: Path, expected: str) -> None:
+    got = _digest(path, "sha256")
+    if got != expected.lower():
+        raise ChecksumError(f"{path.name}: sha256 {got}, expected {expected.lower()}")
+
+
+def parse_md5_file(text: str, filename: str) -> str:
+    """The hash for filename in md5sum output ("<hash>  <name>" or "<hash> *<name>")."""
+    for line in text.splitlines():
+        m = re.fullmatch(r"([0-9a-fA-F]{32}) [ *](.+)", line.strip())
+        if m and m[2] == filename:
+            return m[1].lower()
+    raise ChecksumError(f"no md5 for {filename} in the published checksum file")
+
+
+def verify_md5(path: Path, md5_text: str, filename: str | None = None) -> None:
+    expected = parse_md5_file(md5_text, filename or path.name)
+    got = _digest(path, "md5")
+    if got != expected:
+        raise ChecksumError(f"{path.name}: md5 {got}, published {expected}")
 
 
 def is_stale(path: Path, max_age_days: int | None, now: float | None = None) -> bool:
@@ -156,12 +238,53 @@ def is_stale(path: Path, max_age_days: int | None, now: float | None = None) -> 
     return (now if now is not None else time.time()) - path.stat().st_mtime > max_age_days * 86400
 
 
-def download(url: str, dest: Path, max_age_days: int | None = None) -> Path:
+def curl(url: str, dest: Path) -> None:
+    check_url(url)
+    # HTTPS only, redirects included.
+    run("curl", "-fL", "--proto", "=https", "--proto-redir", "=https", "--retry", "3", "-o", dest, url)
+
+
+def download(url: str, dest: Path, max_age_days: int | None = None, sha256: str | None = None) -> Path:
     if not is_stale(dest, max_age_days):
         return dest
+    check_url(url)
     log(f"downloading {url}")
     part = dest.with_name(dest.name + ".part")
-    run("curl", "-fL", "--retry", "3", "-o", part, url)
+    part.unlink(missing_ok=True)
+    curl(url, part)
+    if sha256:
+        try:
+            verify_sha256(part, sha256)
+        except ChecksumError:
+            part.unlink()
+            raise
+    part.rename(dest)
+    return dest
+
+
+def download_extract(region: str, dest: Path) -> Path:
+    """A Geofabrik extract, checked against the .md5 Geofabrik publishes next to it."""
+    if not is_stale(dest, EXTRACT_MAX_AGE_DAYS):
+        return dest
+    url = GEOFABRIK.format(region)
+    part = dest.with_name(dest.name + ".part")
+    md5 = dest.with_name(dest.name + ".md5")
+    # The extract can be replaced between the two downloads: one retry.
+    for attempt in (1, 2):
+        part.unlink(missing_ok=True)
+        md5.unlink(missing_ok=True)
+        log(f"downloading {url}")
+        curl(url, part)
+        curl(url + ".md5", md5)
+        try:
+            verify_md5(part, md5.read_text(encoding="utf-8", errors="replace"), Path(urllib.parse.urlsplit(url).path).name)
+            break
+        except ChecksumError as e:
+            if attempt == 2:
+                part.unlink(missing_ok=True)
+                raise
+            log(f"{e}; retrying")
+    md5.unlink()
     part.rename(dest)
     return dest
 
@@ -187,7 +310,9 @@ def ogr_to_geojson(gpkg: Path, layer: str, where: str, workdir: Path) -> dict:
 
 def load_admin_express(workdir: Path) -> tuple[dict[str, dict], dict[str, tuple[float, float]]]:
     """Commune features and chef-lieu points (lat, lon) by INSEE code."""
-    archive = download(ADMIN_EXPRESS, workdir / "downloads" / f"{ADMIN_EXPRESS_EDITION}.7z")
+    archive = download(
+        ADMIN_EXPRESS, make_dir(workdir / "downloads") / f"{ADMIN_EXPRESS_EDITION}.7z", sha256=ADMIN_EXPRESS_SHA256
+    )
     extract_dir = workdir / "admin-express"
     if not extract_dir.exists():
         run("7z", "x", "-y", f"-o{extract_dir}.part", archive)
@@ -208,7 +333,7 @@ def load_admin_express(workdir: Path) -> tuple[dict[str, dict], dict[str, tuple[
 
 
 def load_postcodes(workdir: Path) -> dict[str, set[str]]:
-    path = download(LAPOSTE_POSTCODES, workdir / "downloads" / "laposte-hexasmal.csv")
+    path = download(LAPOSTE_POSTCODES, make_dir(workdir / "downloads") / "laposte-hexasmal.csv")
     raw = path.read_bytes()
     try:
         text = raw.decode("utf-8-sig")
@@ -233,10 +358,7 @@ def distance_km(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 def prepare_osrm(workdir: Path, bbox: tuple[float, float, float, float]) -> Path:
     """Merge the extracts, clip them to bbox (to fit in memory), and build the MLD graph."""
-    pbfs = [
-        download(GEOFABRIK.format(r), workdir / "downloads" / f"{r}-latest.osm.pbf", EXTRACT_MAX_AGE_DAYS)
-        for r in REGIONS
-    ]
+    pbfs = [download_extract(r, make_dir(workdir / "downloads") / f"{r}-latest.osm.pbf") for r in REGIONS]
     # The graph is keyed on the bbox and the extracts it was built from.
     key = repr((bbox, [(p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in pbfs]))
     osrm_dir = workdir / f"osrm-{hashlib.sha256(key.encode()).hexdigest()[:12]}"
@@ -244,7 +366,7 @@ def prepare_osrm(workdir: Path, bbox: tuple[float, float, float, float]) -> Path
     if (osrm_dir / "READY").exists():
         return graph
     shutil.rmtree(osrm_dir, ignore_errors=True)
-    osrm_dir.mkdir(parents=True)
+    make_dir(osrm_dir)
     merged = osrm_dir / "merged.osm.pbf"
     run("osmium", "merge", "--overwrite", "-o", merged, *pbfs)
     clipped = osrm_dir / "area.osm.pbf"
@@ -262,8 +384,8 @@ def osm_timestamp(workdir: Path) -> str:
     stamps = []
     for r in REGIONS:
         out = subprocess.run(
-            ["osmium", "fileinfo", "-g", "header.option.osmosis_replication_timestamp",
-             workdir / "downloads" / f"{r}-latest.osm.pbf"],
+            tool("osmium", "fileinfo", "-g", "header.option.osmosis_replication_timestamp",
+                 workdir / "downloads" / f"{r}-latest.osm.pbf"),
             check=True, capture_output=True, text=True,
         ).stdout.strip()
         if out:
@@ -273,8 +395,8 @@ def osm_timestamp(workdir: Path) -> str:
 
 def osrm_table(graph: Path, points: list[tuple[float, float]]) -> list[list[float | None]]:
     proc = subprocess.Popen(
-        ["osrm-routed", "--algorithm", "mld", "-i", "127.0.0.1", "-p", str(OSRM_PORT),
-         "--max-table-size", str(max(100, len(points))), str(graph)],
+        tool("osrm-routed", "--algorithm", "mld", "-i", "127.0.0.1", "-p", str(OSRM_PORT),
+             "--max-table-size", str(max(100, len(points))), graph),
     )
     try:
         coords = ";".join(f"{lon:.6f},{lat:.6f}" for lat, lon in points)
@@ -331,7 +453,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, default=Path("data"))
     parser.add_argument(
         "--workdir", type=Path,
-        default=Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agenda-travel-matrix",
+        default=(
+            ROOT_WORKDIR if os.geteuid() == 0
+            else Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agenda-travel-matrix"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -343,7 +468,9 @@ def main(argv: list[str] | None = None) -> int:
             GDAL_LIBRARY_PATH=os.environ.get("GDAL_LIBRARY_PATH"),
         )
 
-    args.workdir.mkdir(parents=True, exist_ok=True)
+    make_dir(args.workdir)
+    if subprocess.run(tool("test", "-w", args.workdir, "-a", "-x", args.workdir)).returncode != 0:
+        parser.error(f"{args.workdir} must be writable by the user the tools run as (nobody when root)")
     features, chefs = load_admin_express(args.workdir)
     postcodes = load_postcodes(args.workdir)
     if args.origin not in chefs:
