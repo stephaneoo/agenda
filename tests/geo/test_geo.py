@@ -131,3 +131,104 @@ def test_load_geo_refuses_to_remove_a_referenced_commune(geo_loaded: None, tmp_p
         call_command("load_geo", matrix=str(tmp_path / "m.json"), communes=str(tmp_path / "c.geojson"))
     assert Commune.objects.filter(insee="26198").exists()
     assert {c.insee for c in services.covered_communes()} == {"26220", "26182", "26377", "84138"}
+
+
+# --- Malformed input: a CommandError, and nothing loaded. ---
+
+from collections.abc import Callable  # noqa: E402
+from typing import Any  # noqa: E402
+
+from geo.management.commands import load_geo as load_geo_module  # noqa: E402
+
+BOWTIE = {
+    "type": "MultiPolygon",
+    "coordinates": [[[[5.12, 44.34], [5.16, 44.38], [5.16, 44.34], [5.12, 44.38], [5.12, 44.34]]]],
+}
+
+
+def first_props(c: dict) -> dict:
+    return c["features"][0]["properties"]
+
+
+COMMUNE_BREAKAGES: dict[str, Callable[[dict], Any]] = {
+    "not a collection": lambda c: c.clear(),
+    "features not a list": lambda c: c.update(features={"a": 1}),
+    "no properties": lambda c: c["features"][0].pop("properties"),
+    "insee too short": lambda c: first_props(c).update(insee="2622"),
+    "insee letters": lambda c: first_props(c).update(insee="26C20"),
+    "insee not a string": lambda c: first_props(c).update(insee=26220),
+    "postcode too short": lambda c: first_props(c).update(postal_codes=["2611"]),
+    "postcode with letters": lambda c: first_props(c).update(postal_codes=["2611O"]),
+    "postcodes not a list": lambda c: first_props(c).update(postal_codes="26110"),
+    "name missing": lambda c: first_props(c).pop("name"),
+    "name too long": lambda c: first_props(c).update(name="x" * 101),
+    "lat not a number": lambda c: first_props(c).update(lat="north"),
+    "lat out of range": lambda c: first_props(c).update(lat=95.0),
+    "lon NaN": lambda c: first_props(c).update(lon=float("nan")),
+    "self-intersecting polygon": lambda c: c["features"][0].update(geometry=BOWTIE),
+    "geometry garbage": lambda c: c["features"][0].update(geometry={"type": "Blob", "coordinates": 1}),
+    "geometry a point": lambda c: c["features"][0].update(geometry={"type": "Point", "coordinates": [5.1, 44.3]}),
+    "duplicate insee": lambda c: c["features"].append(json.loads(json.dumps(c["features"][0]))),
+}
+
+MATRIX_BREAKAGES: dict[str, Callable[[dict], Any]] = {
+    "not an object": lambda m: m.clear(),
+    "commune without insee": lambda m: m["communes"][0].pop("insee"),
+    "commune insee malformed": lambda m: m["communes"][0].update(insee="2A2B0"),
+    "origin malformed": lambda m: m.update(origin_for_area="26220; DROP"),
+    "area_minutes a string": lambda m: m.update(area_minutes="30"),
+    "minutes row not a list": lambda m: m["minutes"].__setitem__(0, 5),
+    "version not a string": lambda m: m.update(version=["x"]),
+}
+
+
+def load_broken(tmp_path: Path, communes: dict | None = None, matrix: dict | None = None) -> None:
+    c = communes if communes is not None else json.loads((FIXTURES / "communes.small.geojson").read_text())
+    m = matrix if matrix is not None else json.loads((FIXTURES / "travel-times.small.json").read_text())
+    (tmp_path / "c.geojson").write_text(json.dumps(c))
+    (tmp_path / "m.json").write_text(json.dumps(m))
+    call_command("load_geo", matrix=str(tmp_path / "m.json"), communes=str(tmp_path / "c.geojson"))
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("breakage", COMMUNE_BREAKAGES, ids=list(COMMUNE_BREAKAGES))
+def test_load_geo_rejects_malformed_communes(tmp_path: Path, breakage: str) -> None:
+    c = json.loads((FIXTURES / "communes.small.geojson").read_text())
+    if breakage == "not a collection":
+        c = []  # type: ignore[assignment]
+    else:
+        COMMUNE_BREAKAGES[breakage](c)
+    with pytest.raises(CommandError):
+        load_broken(tmp_path, communes=c)
+    assert not Commune.objects.exists()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("breakage", MATRIX_BREAKAGES, ids=list(MATRIX_BREAKAGES))
+def test_load_geo_rejects_malformed_matrix(tmp_path: Path, breakage: str) -> None:
+    m = json.loads((FIXTURES / "travel-times.small.json").read_text())
+    if breakage == "not an object":
+        m = []  # type: ignore[assignment]
+    else:
+        MATRIX_BREAKAGES[breakage](m)
+    with pytest.raises(CommandError):
+        load_broken(tmp_path, matrix=m)
+    assert not Commune.objects.exists()
+
+
+@pytest.mark.django_db
+def test_load_geo_accepts_corsican_insee(tmp_path: Path) -> None:
+    c = json.loads((FIXTURES / "communes.small.geojson").read_text())
+    extra = json.loads(json.dumps(c["features"][-1]))
+    extra["properties"].update(insee="2A004", name="Ajaccio", postal_codes=["20000"])
+    c["features"].append(extra)
+    load_broken(tmp_path, communes=c)
+    assert Commune.objects.filter(insee="2A004").exists()
+
+
+@pytest.mark.django_db
+def test_load_geo_caps_input_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(load_geo_module, "MAX_INPUT_BYTES", 1000)
+    with pytest.raises(CommandError, match="too large"):
+        load_broken(tmp_path)
+    assert not Commune.objects.exists()
