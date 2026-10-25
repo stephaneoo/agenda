@@ -222,6 +222,13 @@
               s.postgres
               s.pkgs.uv
               s.nodejs
+              # Operations: infra/ (OpenTofu, scw), secrets/ (sops, age).
+              s.pkgs.opentofu
+              s.pkgs.scaleway-cli
+              s.pkgs.sops
+              s.pkgs.age
+              s.pkgs.ssh-to-age
+              s.pkgs.jq
             ];
             env = s.geoEnv // {
               AGENDA_DEV = "1";

@@ -63,6 +63,48 @@ in
       python manage.py check --deploy --fail-level WARNING
   '';
 
+  # infra/ is formatted and valid (no network, no backend), with the provider release that
+  # infra/.terraform.lock.hcl pins: its zip, fetched by the lock's zh: hash, from a local
+  # mirror, so `tofu init` checks it against the lock too. nixpkgs' provider is older.
+  # Bump `version` and the hashes together with the lock file (infra/README.md).
+  infra-validate =
+    let
+      version = "2.88.0";
+      platform =
+        {
+          x86_64-linux = {
+            name = "linux_amd64";
+            sha256 = "1e2fe730b88b984c23f64ac72c39e6d90de0cc381d9108294b84652241992c7b";
+          };
+          aarch64-darwin = {
+            name = "darwin_arm64";
+            sha256 = "92bef9f8bec704fb3d5448194ecec9b9db50fe22714168a293adafed8faf19a2";
+          };
+          x86_64-darwin = {
+            name = "darwin_amd64";
+            sha256 = "aae56c9f4eaf94401cbe1d9db46043d62b501b99e985271c3e39aa95990e0b59";
+          };
+        }
+        .${pkgs.stdenv.hostPlatform.system};
+      zip = pkgs.fetchurl {
+        url = "https://github.com/scaleway/terraform-provider-scaleway/releases/download/v${version}/terraform-provider-scaleway_${version}_${platform.name}.zip";
+        inherit (platform) sha256;
+      };
+    in
+    pkgs.runCommand "agenda-infra-validate" { nativeBuildInputs = [ pkgs.opentofu ]; } ''
+      mirror=$TMPDIR/mirror/registry.opentofu.org/scaleway/scaleway
+      mkdir -p $mirror
+      cp ${zip} $mirror/terraform-provider-scaleway_${version}_${platform.name}.zip
+      cp -r ${self}/infra infra
+      chmod -R u+w infra
+      cd infra
+      export HOME=$TMPDIR TF_IN_AUTOMATION=1
+      tofu fmt -check -diff
+      tofu init -backend=false -input=false -lockfile=readonly -plugin-dir=$TMPDIR/mirror >/dev/null
+      tofu validate
+      touch $out
+    '';
+
   # Every package in uv.lock comes from files.pythonhosted.org.
   lock-sources = withSource "agenda-lock-sources" ''
     python -m tools.check_lock_sources uv.lock

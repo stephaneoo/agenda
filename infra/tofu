@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# OpenTofu on infra/, with the Scaleway credentials mapped for the S3 state backend.
+# Run it only through `tools/dev run-scw` (the SCW_* variables live for that one command):
+#   tools/dev run-scw 'nix develop -c infra/tofu plan'
+set -euo pipefail
+: "${SCW_ACCESS_KEY:?run through tools/dev run-scw}" "${SCW_SECRET_KEY:?}" "${SCW_DEFAULT_PROJECT_ID:?}"
+export AWS_ACCESS_KEY_ID=$SCW_ACCESS_KEY AWS_SECRET_ACCESS_KEY=$SCW_SECRET_KEY
+export TF_VAR_project_id=$SCW_DEFAULT_PROJECT_ID
+export TF_IN_AUTOMATION=1
+exec tofu -chdir="$(dirname "$0")" "$@"
