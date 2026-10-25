@@ -186,7 +186,7 @@ def test_communes_travel_times_categories_status_shapes(client: Client, events: 
 def test_openapi_served_at_v1(client: Client) -> None:
     response, spec = get(client, "/api/v1/openapi.json")
     assert response.status_code == 200
-    assert spec["openapi"].startswith("3.1") and spec["info"]["version"] == "1.1.0"
+    assert spec["openapi"].startswith("3.1") and spec["info"]["version"] == "1.2.0"
     assert {"/api/v1/occurrences", "/api/v1/occurrences/{id}", "/api/v1/events/{id}", "/api/v1/communes",
             "/api/v1/travel-times", "/api/v1/categories", "/api/v1/status"} <= set(spec["paths"])
     assert check_openapi()
@@ -252,7 +252,7 @@ def test_every_api_error_is_problem_json(client: Client, method: str, url: str, 
 
 def test_openapi_documents_errors_enums_and_ranges(client: Client) -> None:
     _, spec = get(client, "/api/v1/openapi.json")
-    assert spec["info"]["version"] == "1.1.0"
+    assert spec["info"]["version"] == "1.2.0"
     op = spec["paths"]["/api/v1/occurrences"]["get"]
     assert list(op["responses"]["422"]["content"]) == ["application/problem+json"]
     one_op = spec["paths"]["/api/v1/occurrences/{id}"]["get"]

@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -13,8 +14,10 @@ from typing import Any
 from django.db.models import DateTimeField, ExpressionWrapper, F, Q, Value
 
 from agenda.categories import SLUGS
+from agenda.fields import INSEE
 from agenda.models import Event, Occurrence
 from agenda.timeutil import day_start, format_local, today
+from claims.keys import year_ok
 from claims.models import Claim, Source
 from geo.models import MatrixInfo
 from geo.services import covered_communes, reachable
@@ -24,6 +27,11 @@ MAX_SPAN_DAYS = 92
 DEFAULT_SPAN_DAYS = 30
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 200
+MAX_CURSOR = 512
+# What agenda.projection.event_id / occurrence_id produce. Anything else is unknown (404)
+# before it reaches the database, which refuses a NUL with an error, not an empty result.
+OCCURRENCE_ID = re.compile(r"^occ_[A-Za-z0-9_-]{12}$")
+EVENT_ID = re.compile(r"^evt_[A-Za-z0-9_-]{12}$")
 
 
 class InvalidQuery(Exception):
@@ -40,7 +48,8 @@ class NotFound(Exception):
 
 @dataclass(frozen=True)
 class Gone:
-    """Hidden, pending or withdrawn (410)."""
+    """Hidden, pending or withdrawn (410). Callers answer all three the same way (GONE), so
+    a 410 doesn't tell a moderator's hide from a source's withdrawal."""
 
     id: str
 
@@ -75,12 +84,14 @@ def _encode_cursor(occ: Occurrence) -> str:
 
 def _decode_cursor(cursor: str) -> tuple[datetime, str]:
     try:
+        if len(cursor) > MAX_CURSOR:
+            raise ValueError
         raw = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
         start = datetime.fromisoformat(raw["s"])
-        if start.tzinfo is None or not isinstance(raw["i"], str):
+        if start.tzinfo is None or not year_ok(start) or not isinstance(raw["i"], str) or not OCCURRENCE_ID.match(raw["i"]):
             raise ValueError
         return start, raw["i"]
-    except (binascii.Error, ValueError, TypeError, KeyError, UnicodeDecodeError):
+    except (binascii.Error, ValueError, TypeError, KeyError, UnicodeDecodeError, OverflowError):
         raise InvalidQuery("invalid cursor") from None
 
 
@@ -94,6 +105,8 @@ def validate_query(
         raise InvalidQuery(f"within must be between 0 and {MAX_WITHIN}")
     communes = None
     if commune:
+        if not INSEE.match(commune):
+            raise InvalidQuery("commune must be an INSEE code")
         if not covered_communes().filter(insee=commune).exists():
             raise InvalidQuery(f"commune {commune} is not in the covered area")
         # A commune with no radius keeps that commune only.
@@ -152,6 +165,8 @@ def search_occurrences(
 
 def get_occurrence(id: str) -> Occurrence | Gone | MovedTo:
     """A single occurrence, past ones included. Raises NotFound for an unknown ID."""
+    if not OCCURRENCE_ID.match(id):
+        raise NotFound(id)
     occ = Occurrence.objects.select_related("event").filter(id=id).first()
     if occ is None:
         raise NotFound(id)
@@ -175,6 +190,8 @@ def find_occurrence(url_key: str, local_date: date) -> Occurrence | Gone | Moved
 
 def get_event(id: str) -> Event | Gone:
     """The event, with its published occurrences from today onwards in `future_occurrences`."""
+    if not EVENT_ID.match(id):
+        raise NotFound(id)
     event = Event.objects.filter(id=id).first()
     if event is None:
         raise NotFound(id)

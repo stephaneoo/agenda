@@ -43,3 +43,36 @@ class ProblemErrorsMiddleware:
                 replaced["Allow"] = response["Allow"]
             return replaced
         return response
+
+
+V1 = "/api/v1/"
+CORS_MAX_AGE = 86400
+
+
+class CorsMiddleware:
+    """The read API is public, read-only and cookieless: any origin may read it.
+
+    GET and HEAD responses under /api/v1/, problems included, allow every origin. OPTIONS
+    there is a CORS preflight, answered with 204. Never with credentials.
+    Placed before ProblemErrorsMiddleware, so it sees the final response.
+    """
+
+    def __init__(self, get_response: Callable[[HttpRequest], HttpResponse]) -> None:
+        self.get_response = get_response
+
+    def __call__(self, request: HttpRequest) -> HttpResponse:
+        if not request.path.startswith(V1):
+            return self.get_response(request)
+        if request.method == "OPTIONS":
+            response = HttpResponse(status=204)
+            response["Access-Control-Allow-Origin"] = "*"
+            response["Access-Control-Allow-Methods"] = "GET, HEAD, OPTIONS"
+            response["Access-Control-Max-Age"] = str(CORS_MAX_AGE)
+            if headers := request.headers.get("Access-Control-Request-Headers"):
+                # Without credentials, any header is fine to read with: echo what was asked.
+                response["Access-Control-Allow-Headers"] = headers[:500]
+            return response
+        response = self.get_response(request)
+        if request.method in ("GET", "HEAD"):
+            response["Access-Control-Allow-Origin"] = "*"
+        return response

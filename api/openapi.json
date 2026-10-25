@@ -634,9 +634,9 @@
     }
   },
   "info": {
-    "description": "Read-only API of the events agenda around Nyons. Data: Licence Ouverte 2.0; each occurrence cites its sources and their last update date.",
+    "description": "Read-only API of the events agenda around Nyons. Data: Licence Ouverte 2.0; each occurrence cites its sources and their last update date. Public and cookieless: every response to a GET carries `Access-Control-Allow-Origin: *`, and OPTIONS answers CORS preflights with 204.",
     "title": "Agenda — API publique",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -747,6 +747,8 @@
             "schema": {
               "anyOf": [
                 {
+                  "maxLength": 5,
+                  "pattern": "^[0-9][0-9AB][0-9]{3}$",
                   "type": "string"
                 },
                 {
@@ -851,6 +853,7 @@
             "schema": {
               "anyOf": [
                 {
+                  "maxLength": 512,
                   "type": "string"
                 },
                 {

@@ -19,7 +19,7 @@ from api import schemas
 from api.problems import problem
 from geo.services import covered_communes, matrix_payload
 
-VERSION = "1.1.0"  # bump on every change to the API (spec, Versioning); tools.check_openapi_version checks it
+VERSION = "1.2.0"  # bump on every change to the API (spec, Versioning); tools.check_openapi_version checks it
 DATE = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 
 
@@ -40,12 +40,17 @@ api = AgendaAPI(
     title="Agenda — API publique",
     version=VERSION,
     description="Read-only API of the events agenda around Nyons. Data: Licence Ouverte 2.0; "
-    "each occurrence cites its sources and their last update date.",
+    "each occurrence cites its sources and their last update date. Public and cookieless: every "
+    "response to a GET carries `Access-Control-Allow-Origin: *`, and OPTIONS answers CORS "
+    "preflights with 204.",
     docs_url=None,
     urls_namespace="api-v1",
 )
 
 ERRORS = {404: schemas.Problem, 410: schemas.Problem}
+INSEE = r"^[0-9][0-9AB][0-9]{3}$"
+# One body for every 410: it must not tell a moderator's hide from a source's withdrawal.
+GONE = "This resource is no longer available."
 
 
 def _date(value: str | None, name: str) -> date | None:
@@ -84,7 +89,8 @@ def _http_error(request: HttpRequest, exc: HttpError) -> HttpResponse:
 @api.get("/occurrences", response={200: schemas.OccurrencePage, 422: schemas.Problem}, summary="Search occurrences")
 def occurrences(
     request: HttpRequest,
-    commune: str | None = Query(None, description="INSEE code of the origin, in the covered area. Required with "
+    commune: str | None = Query(None, pattern=INSEE, max_length=5,
+                                description="INSEE code of the origin, in the covered area. Required with "
                                 "`within`; without `within`, only occurrences in that commune itself are returned."),
     within: int | None = Query(None, ge=0, le=read.MAX_WITHIN,
                                description="Minutes by car from `commune`, 0 to 60. 0 keeps the origin commune only."),
@@ -94,7 +100,7 @@ def occurrences(
                                 description="Local date YYYY-MM-DD, inclusive; default from + 30 days; "
                                 f"at most {read.MAX_SPAN_DAYS} days after from"),
     category: list[schemas.CategorySlug] = Query([], description="Category slugs, repeated"),
-    cursor: str | None = Query(None, description="The `next` of the previous page"),
+    cursor: str | None = Query(None, max_length=read.MAX_CURSOR, description="The `next` of the previous page"),
     limit: int = Query(read.DEFAULT_LIMIT, ge=1, le=read.MAX_LIMIT, description=f"1 to {read.MAX_LIMIT}"),
 ):
     page = read.search_occurrences(
@@ -110,7 +116,7 @@ def occurrence(request: HttpRequest, id: str):
     if isinstance(found, read.MovedTo):
         return HttpResponsePermanentRedirect(f"/api/v1/occurrences/{found.new_id}")
     if isinstance(found, read.Gone):
-        return problem(410, "this occurrence is hidden or withdrawn")
+        return problem(410, GONE)
     return read.occurrence_dict(found, base_url(request))
 
 
@@ -118,7 +124,7 @@ def occurrence(request: HttpRequest, id: str):
 def event(request: HttpRequest, id: str):
     found = read.get_event(id)
     if isinstance(found, read.Gone):
-        return problem(410, "this event is hidden")
+        return problem(410, GONE)
     return read.event_dict(found, base_url(request))
 
 

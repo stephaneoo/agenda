@@ -1,5 +1,6 @@
 {% extends "web/base.html" %}
-{% block title %}Événement retiré{% endblock %}
+{% block title %}Ressource indisponible{% endblock %}
 {% block content %}
-<p class="empty">Cet événement n'est plus publié. <a href="/">Retour à l'agenda</a></p>
+{# One page for every 410: it must not tell a moderator's hide from a source's withdrawal. #}
+<p class="empty">Cette ressource n'est plus disponible. <a href="/">Retour à l'agenda</a></p>
 {% endblock %}
