@@ -32,9 +32,12 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
 - `python manage.py sync_datatourisme`: the nightly DATAtourisme sync (`ingest/sync.py`). Exits 1
   when a page couldn't be fetched (no withdrawals then). Records its outcome in the status file
   (job `sync-datatourisme`), in `Source` and in `ingest.SyncRun`. A run that would withdraw more
-  than 20% of the area's future occurrences is `partial` and withdraws nothing. Bump
-  `ingest.sync.PARSER_VERSION` when parse or mapping change what a row becomes: unchanged
-  payloads are skipped by hash.
+  than 20% of the area's future occurrences is `partial` and withdraws nothing
+  (`--allow-mass-withdrawal` applies them for one run, once upstream is checked); rows refused by
+  `write_claims` also make it `partial`. Every in-area row is rewritten every run (unchanged
+  values are no-ops), so a withdrawn date that comes back is listed again; the payload hash
+  only counts unchanged vs updated. One run at a time (advisory lock). Bump
+  `ingest.sync.PARSER_VERSION` when parse or mapping change what a row becomes.
 - **Never wrap many `write_claims` calls in one outer transaction** (e.g. a whole sync run):
   each call takes its event's lock until the transaction ends. One event, one transaction.
 - Accepted v1 edge case: the cutoff for a `listed: false` claim (a drop after the occurrence

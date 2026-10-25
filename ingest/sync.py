@@ -31,6 +31,7 @@ from typing import Any
 
 from django.contrib.gis.db.models import Extent
 from django.contrib.gis.geos import Point
+from django.db import DatabaseError, connection
 from django.utils import timezone
 
 from agenda.models import Occurrence
@@ -48,12 +49,21 @@ logger = logging.getLogger(__name__)
 SOURCE = parse.SOURCE
 JOB = "sync-datatourisme"
 WITHDRAWAL_THRESHOLD = 0.20
+# A clean run withdrawing more than this says so in its summary (the MOTD shows it), so a
+# slow drift under the threshold is seen.
+DRIFT_WARNING = 0.05
+# pg advisory lock key: one sync at a time.
+LOCK_KEY = 7_204_311_626
 # Degrees around the covered communes' extent, so a point on the border isn't cut off.
 BBOX_MARGIN = 0.01
 # Part of the payload hash: bump it when parse or mapping change what a row becomes, so the
 # next sync rewrites every record instead of keeping them as unchanged.
 PARSER_VERSION = 1
 OUTCOME = {"clean": "ok", "partial": "partial", "failed": "failed"}
+
+
+class AlreadyRunning(Exception):
+    """Another sync holds the run lock."""
 
 
 def area_queries() -> list[dict[str, str]]:
@@ -98,29 +108,55 @@ def _listed_future(now: datetime) -> dict[str, set[str]]:
     return dict(out)
 
 
-def run(session: Any = None, queries: list[dict[str, str]] | None = None) -> SyncRun:
-    """One sync. `session` and `queries` default to the live API and area_queries()."""
+def _try_lock() -> bool:
+    """One sync at a time: a session-level advisory lock, held until _unlock()."""
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_try_advisory_lock(%s)", [LOCK_KEY])
+        return bool(cursor.fetchone()[0])
+
+
+def _unlock() -> None:
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_unlock(%s)", [LOCK_KEY])
+
+
+def run(session: Any = None, queries: list[dict[str, str]] | None = None, *, allow_mass_withdrawal: bool = False) -> SyncRun:
+    """One sync. `session` and `queries` default to the live API and area_queries().
+
+    `allow_mass_withdrawal` applies withdrawals past WITHDRAWAL_THRESHOLD, for this run only
+    (an operator's decision after checking upstream: sync_datatourisme --allow-mass-withdrawal).
+    """
     started = timezone.now()
-    result = SyncRun.objects.create(source=SOURCE, started_at=started, status="failed")
+    result = SyncRun(source=SOURCE, started_at=started, status="failed")
+    locked = False
     try:
+        if not _try_lock():
+            raise AlreadyRunning("another sync is already running")
+        locked = True
+        result.save()
         queries = area_queries() if queries is None else queries
         if not queries:
             raise client.FetchError("no covered area loaded (manage.py load_geo)")
-        _sync(result, session or client.make_session(), queries, started)
-    except client.FetchError as e:
+        _sync(result, session or client.make_session(), queries, started, allow_mass_withdrawal)
+    except (client.FetchError, AlreadyRunning) as e:
         result.status = "failed"
         result.error = str(e)[:1000]
-        logger.error("sync-datatourisme: fetch failed, no withdrawals: %r", str(e))
+        logger.error("sync-datatourisme: failed, no withdrawals: %r", str(e))
     except Exception as e:
         result.status = "failed"
         result.error = f"{type(e).__name__}: {e}"[:1000]
         raise
     finally:
-        _finish(result, started)
+        _finish(result, started, record_run=locked)
+        if locked:
+            try:
+                _unlock()
+            except DatabaseError:
+                logger.exception("sync-datatourisme: could not release the run lock")
     return result
 
 
-def _sync(result: SyncRun, session: Any, queries: list[dict[str, str]], started: datetime) -> None:
+def _sync(result: SyncRun, session: Any, queries: list[dict[str, str]], started: datetime, allow_mass: bool) -> None:
     covered = {c.insee: c for c in covered_communes()}
     before = _listed_future(started)
     records = {r.external_id: r for r in SourceRecord.objects.filter(source_id=SOURCE)}
@@ -137,13 +173,15 @@ def _sync(result: SyncRun, session: Any, queries: list[dict[str, str]], started:
         if key in rows_seen:  # the same row from another query
             continue
         rows_seen.add(key)
-        p = parse.place(raw)
+        p = parse.place(raw)  # an invalid point (missing, out of range, 0,0) is no point
         insee = resolve_commune(p.lat, p.lon, p.postal_code, p.commune_name)
         if insee is None and p.lat is not None and not _in_any_commune(p.lat, p.lon):
-            # Every covered commune and its neighbours are loaded: a point in none of them
-            # is outside the area.
-            result.out_of_area += 1
-            continue
+            # A point in no loaded commune (the area's neighbours are loaded). If the address
+            # says a covered commune, point and address disagree: can't tell, not guessed.
+            by_address = resolve_commune(None, None, p.postal_code, p.commune_name)
+            if by_address not in covered:
+                result.out_of_area += 1
+                continue
         if insee is None:
             # Not guessed, and not taken as gone either: its dates stay as they were.
             result.unresolved_rows += 1
@@ -153,6 +191,25 @@ def _sync(result: SyncRun, session: Any, queries: list[dict[str, str]], started:
             result.out_of_area += 1
             continue
         present.add(key)
+        commune = covered[insee]
+        try:
+            key, claims = parse.row_to_claims(
+                raw, commune=insee, commune_name=commune.name, seen_at=started, postal_codes=commune.postal_codes
+            )
+        except parse.RowError as e:
+            result.failed_rows += 1
+            logger.warning("sync-datatourisme: %r unusable: %r", key, str(e))
+            continue
+        # Always written, even when the payload is unchanged: unchanged values are no-ops in
+        # write_claims (no history, seen_at kept), and a date an earlier run withdrew, or one
+        # a partial or failed run couldn't, gets its listed claim right again.
+        try:
+            write_claims(key, claims)
+        except ValueError as e:
+            result.refused_rows += 1
+            logger.warning("sync-datatourisme: %r refused: %r", key, str(e))
+            continue
+        written[key] = {c.target_key for c in claims if c.target_type == "occurrence"}
         payload = {k: v for k, v in raw.items() if k != "__id"}  # the API's row number
         digest = payload_hash(payload, insee)
         record = records.get(ext_id)
@@ -160,17 +217,6 @@ def _sync(result: SyncRun, session: Any, queries: list[dict[str, str]], started:
             result.unchanged += 1
             SourceRecord.objects.filter(pk=record.pk).update(last_seen_sync=started)
             continue
-        commune = covered[insee]
-        try:
-            key, claims = parse.row_to_claims(
-                raw, commune=insee, commune_name=commune.name, seen_at=started, postal_codes=commune.postal_codes
-            )
-            write_claims(key, claims)
-        except ValueError as e:  # parse.RowError, or refused by write_claims
-            result.failed_rows += 1
-            logger.warning("sync-datatourisme: %r skipped: %r", key, str(e))
-            continue
-        written[key] = {c.target_key for c in claims if c.target_type == "occurrence"}
         updated = parse.updated_at(raw)
         SourceRecord.objects.update_or_create(
             source_id=SOURCE, external_id=ext_id,
@@ -197,30 +243,40 @@ def _sync(result: SyncRun, session: Any, queries: list[dict[str, str]], started:
             drops[event] = sorted(gone)
     total = sum(len(v) for v in before.values())
     count = sum(len(v) for v in drops.values())
-    if count and count > WITHDRAWAL_THRESHOLD * total:
+    result.status = "partial" if result.refused_rows else "clean"
+    if count and count > WITHDRAWAL_THRESHOLD * total and not allow_mass:
         result.status = "partial"
         result.skipped_withdrawals = count
         logger.warning("sync-datatourisme: %d of %d future occurrences would be withdrawn: skipped", count, total)
         return
-    result.status = "clean"
     for event, keys in drops.items():
         try:
             write_claims(event, [NewClaim("occurrence", k, "listed", False, SOURCE, started) for k in keys])
         except ValueError as e:
-            result.failed_rows += 1
-            logger.warning("sync-datatourisme: withdrawing %r failed: %r", event, str(e))
+            result.refused_rows += 1
+            result.status = "partial"
+            logger.warning("sync-datatourisme: withdrawing %r refused: %r", event, str(e))
             continue
         result.withdrawn += len(keys)
+    if total and result.withdrawn > DRIFT_WARNING * total:
+        result.warning = f"withdrew {round(100 * result.withdrawn / total)}% of {total} future occurrences"
+        logger.warning("sync-datatourisme: %s", result.warning)
 
 
-def _finish(result: SyncRun, started: datetime) -> None:
+def _finish(result: SyncRun, started: datetime, *, record_run: bool) -> None:
+    """Record the outcome: SyncRun, Source (unless another run holds the lock: Source's fields
+    are its), then the status file, always, even when the database is what failed."""
     result.finished_at = timezone.now()
-    result.save()
     outcome = OUTCOME[result.status]
-    fields: dict[str, Any] = {"last_run_at": started, "last_outcome": outcome}
-    if outcome != "failed":
-        fields["last_success_at"] = started
-    Source.objects.filter(name=SOURCE).update(**fields)
+    try:
+        result.save()
+        if record_run:
+            fields: dict[str, Any] = {"last_run_at": started, "last_outcome": outcome}
+            if outcome != "failed":
+                fields["last_success_at"] = started
+            Source.objects.filter(name=SOURCE).update(**fields)
+    except DatabaseError:
+        logger.exception("sync-datatourisme: could not record the run in the database")
     try:
         status.record(JOB, outcome, result.summary())
     except (OSError, ValueError):

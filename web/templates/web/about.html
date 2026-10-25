@@ -6,7 +6,7 @@
   <h1>À propos</h1>
   <h2>Sources</h2>
   <ul>{% for s in sync.sources %}
-    <li>{{ s.name }} : dernière synchronisation réussie {% if s.last_success %}le {{ s.last_success|date:"j F Y à H:i" }}{% else %}jamais{% endif %}{% if s.last_outcome == "partial" %} (synchronisation partielle : les retraits ont été suspendus){% elif s.last_outcome == "failed" %} (la dernière tentative a échoué{% if s.last_run %} le {{ s.last_run|date:"j F Y à H:i" }}{% endif %}){% endif %}.</li>{% empty %}
+    <li>{{ s.name }} : dernière synchronisation réussie {% if s.last_success %}le {{ s.last_success|date:"j F Y à H:i" }}{% else %}jamais{% endif %}{% if s.last_outcome == "partial" %} (synchronisation partielle : une partie des mises à jour ou des retraits a été suspendue){% elif s.last_outcome == "failed" %} (la dernière tentative a échoué{% if s.last_run %} le {{ s.last_run|date:"j F Y à H:i" }}{% endif %}){% endif %}.</li>{% empty %}
     <li>Aucune synchronisation pour l'instant.</li>{% endfor %}
   </ul>
   <h2>Licences</h2>

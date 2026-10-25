@@ -49,6 +49,11 @@ def _valid_point(lat: float | None, lon: float | None) -> bool:
     return -90 <= lat <= 90 and -180 <= lon <= 180 and (lat, lon) != (0, 0)
 
 
+def valid_point(lat: float | None, lon: float | None) -> bool:
+    """A point resolve_commune would use: finite, in range, and not (0, 0)."""
+    return _valid_point(lat, lon)
+
+
 def _match_name(candidates: list[Commune], postal_code: str | None, name: str | None) -> str | None:
     if not postal_code or not name:
         return None

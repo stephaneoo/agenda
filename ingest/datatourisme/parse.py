@@ -21,6 +21,7 @@ from agenda.fields import MAX_DESCRIPTION, MAX_NAME, MAX_TEXT, safe_url
 from agenda.periods import Period, expand
 from claims.keys import occurrence_key, year_ok
 from claims.services import NewClaim
+from geo.services import valid_point
 from ingest.datatourisme.mapping import category_for
 
 SOURCE = "datatourisme"
@@ -160,7 +161,7 @@ class Place:
 
 def place(row: dict) -> Place:
     lat, lon = coordinate(row.get("Latitude"), 90), coordinate(row.get("Longitude"), 180)
-    if lat is None or lon is None:
+    if not valid_point(lat, lon):  # missing, out of range, or (0, 0): no point at all
         lat = lon = None
     postal_code, name = postcode_and_name(row)
     return Place(lat, lon, postal_code, name)

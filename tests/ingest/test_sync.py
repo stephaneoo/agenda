@@ -81,8 +81,8 @@ def test_commune_resolution_edge_cases(clock) -> None:
         row(5, cp="84600#Valréas", lat=0.0, lon=0.0),
         # No coordinates and a name no commune has: skipped and counted.
         row(6, cp="26110#Nulle-Part", lat=None, lon=None),
-        # A point in no loaded commune (the Gulf of Lion), address in Nyons: the neighbours
-        # of the area are loaded, so it is outside the area, whatever the address says.
+        # A point in no loaded commune (the Gulf of Lion), address in Nyons: point and
+        # address disagree, so it can't be told: skipped, counted, its dates kept.
         row(7, cp="26110#Nyons", lat=43.0, lon=4.0),
         # A postcode alone never decides.
         row(8, cp="26110", lat=None, lon=None),
@@ -97,7 +97,7 @@ def test_commune_resolution_edge_cases(clock) -> None:
         KEY.format(1): "84138", KEY.format(2): "84053", KEY.format(4): "26182", KEY.format(5): "84138",
         KEY.format(9): "26220",
     }
-    assert (result.unresolved_rows, result.out_of_area, result.added) == (3, 2, 5)
+    assert (result.unresolved_rows, result.out_of_area, result.added) == (4, 1, 5)
 
 
 def test_unchanged_row_writes_no_claims(clock) -> None:
