@@ -235,6 +235,7 @@ def _build_service_worker() -> str:
         source.decode()
         .replace('"__VERSION__"', json.dumps(digest.hexdigest()[:16]))
         .replace("__PRECACHE__", json.dumps(urls))
+        .replace("__KILL__", json.dumps(settings.SW_KILL))
     )
 
 
@@ -244,7 +245,13 @@ _cached_service_worker = lru_cache(maxsize=1)(_build_service_worker)
 @require_safe
 def service_worker(request: HttpRequest) -> HttpResponse:
     """/sw.js at the root, so its scope is the whole site. Its cache is named after a hash
-    of what it precaches: a deploy that changes any of it installs a new worker."""
+    of what it precaches: a deploy that changes any of it installs a new worker.
+
+    With settings.SW_KILL (AGENDA_SW_KILL=1) the worker clears every cache and unregisters
+    itself. In production, loopback (the moderators' SSH tunnel) gets a 404: no worker is
+    ever registered on localhost."""
+    if settings.PRODUCTION and is_loopback(request):
+        raise Http404
     body = _build_service_worker() if settings.DEBUG else _cached_service_worker()
     response = HttpResponse(body, content_type="text/javascript; charset=utf-8")
     response["Service-Worker-Allowed"] = "/"

@@ -16,6 +16,7 @@ DEV = os.environ.get("AGENDA_DEV") == "1"
 if DEV and (os.environ.get("AGENDA_ENV") == "production" or os.environ.get("INVOCATION_ID")):
     raise ImproperlyConfigured("AGENDA_DEV=1 is refused in production and under systemd")
 DEBUG = DEV
+PRODUCTION = os.environ.get("AGENDA_ENV") == "production"
 
 
 def _secret_key() -> str:
@@ -124,6 +125,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "web.context_processors.sync",
+                "web.context_processors.offline",
             ],
         },
     },
@@ -153,6 +155,10 @@ USE_TZ = True
 
 # Root of the absolute URLs in the API (e.g. https://agenda.example.org). Empty: the request's host.
 SITE_URL = os.environ.get("AGENDA_SITE_URL", "").rstrip("/")
+
+# Service worker kill switch: AGENDA_SW_KILL=1 serves a /sw.js that clears every cache of the
+# site and unregisters itself, and pages stop registering it (web.views.service_worker).
+SW_KILL = os.environ.get("AGENDA_SW_KILL") == "1"
 
 # Wall-clock budget of one DATAtourisme sync run (ingest.sync.run): past it, the run fails.
 SYNC_DEADLINE_SECONDS = int(os.environ.get("AGENDA_SYNC_DEADLINE_SECONDS") or 15 * 60)

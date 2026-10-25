@@ -85,3 +85,44 @@ export function bannerText(snapshot, reason, format = (s) => SAVED.format(new Da
   const partial = snapshot.complete === false ? " · copie partielle" : "";
   return `${prefix} · ${synced} · copie du ${format(snapshot.savedAt)}${partial}`;
 }
+
+// --- Cached occurrence pages (the service worker's "agenda-pages" cache) ---------------------
+
+export const PAGES = "agenda-pages";
+export const STAMP = "X-Agenda-Cached-At"; // set by sw.js on each cached page: ms since the epoch
+export const MAX_PAGE_AGE_DAYS = 30;
+
+export function pageTooOld(response, now = Date.now()) {
+  const at = Number(response.headers.get(STAMP));
+  return !Number.isFinite(at) || at <= 0 || now - at > MAX_PAGE_AGE_DAYS * 86_400_000;
+}
+
+// After a new copy is saved: drop every cached page the copy doesn't list (hidden, withdrawn
+// or gone since it was visited) and every page over MAX_PAGE_AGE_DAYS. Resolves to the number
+// dropped; never throws.
+export async function evictPages(keep, { cachesApi = globalThis.caches, now = Date.now() } = {}) {
+  if (!cachesApi) return 0;
+  try {
+    const cache = await cachesApi.open(PAGES);
+    let dropped = 0;
+    for (const request of await cache.keys()) {
+      const response = await cache.match(request);
+      if (!keep.has(new URL(request.url).pathname) || !response || pageTooOld(response, now)) {
+        await cache.delete(request);
+        dropped++;
+      }
+    }
+    return dropped;
+  } catch {
+    return 0;
+  }
+}
+
+// The stored copy needs no new download: complete, saved less than `maxAgeMs` ago, and the
+// server's last sync (from /api/v1/status) is the one it was made from.
+export const FRESH_MS = 10 * 60 * 1000;
+export function isFresh(snapshot, lastSync, now = new Date(), maxAgeMs = FRESH_MS) {
+  if (!snapshot || snapshot.complete === false || lastSync === undefined) return false;
+  const age = now.getTime() - Date.parse(snapshot.savedAt);
+  return (snapshot.syncedAt ?? null) === (lastSync ?? null) && age >= 0 && age < maxAgeMs;
+}

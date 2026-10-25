@@ -193,3 +193,23 @@ export function groupForList(occs, from) {
   }
   return { ongoing, days: [...days.keys()].sort().map((day) => ({ day, rows: days.get(day) })) };
 }
+
+// --- Presentation ------------------------------------------------------------------------------
+
+// The site path of an occurrence URL, or null: only an occurrence page ("/evenements/…") on
+// one of `origins` (the page's own, and the configured site's) is ever made a link.
+export function pathOf(url, origins) {
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  return origins.has(parsed.origin) && parsed.pathname.startsWith("/evenements/") ? parsed.pathname : null;
+}
+
+export const STATUS_LABELS = new Map([["rescheduled", "Reprogrammé"], ["postponed", "Reporté"], ["cancelled", "Annulé"]]);
+
+// Label tables are Maps: a value such as "__proto__" or "constructor" is just a missing key.
+export const statusLabel = (status) => STATUS_LABELS.get(status) ?? null;
+export const categoryLabels = (categories) => new Map(categories.map((c) => [c.slug, c.label]));

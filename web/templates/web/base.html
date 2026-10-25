@@ -3,7 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Agenda autour de Nyons{% endblock %}</title>
+<meta name="agenda-origin" content="{{ site_origin }}">
+{% if sw_kill %}<meta name="agenda-sw" content="kill">
+{% endif %}<title>{% block title %}Agenda autour de Nyons{% endblock %}</title>
 <link rel="stylesheet" href="{% static 'web/site.css' %}">
 <script type="module" src="{% static 'web/app.js' %}"></script>
 {% block head %}{% endblock %}

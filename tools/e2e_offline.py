@@ -6,7 +6,9 @@ Seeds a database (tools/e2e_seed.py), starts the app on 127.0.0.1, then in Chrom
 loads /, waits until the service worker controls the page and the IndexedDB copy is saved,
 visits one occurrence page, goes offline, reloads, and checks the list, the banner, the
 commune and radius filters (against tests/fixtures/filter-cases.json), a visited and an
-unvisited occurrence page, and that no Content-Security-Policy violation happened.
+unvisited occurrence page, and that no Content-Security-Policy violation happened. Then a
+visited page is hidden on the server; once the copy is refreshed online, it is no longer
+served offline.
 The browser's clock is fixed at 2026-11-01 09:00 Paris, the fixture's "today".
 """
 
@@ -18,7 +20,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -104,8 +106,9 @@ def main(venv_python: str) -> None:
             url = {o["name"]: o["url"] for o in items}
             path = lambda name: "/" + url[name].split("/", 3)[3]  # noqa: E731
             collect()
-            page.goto(f"{BASE}{path('dateonly')}")  # visited online: cached by the worker
-            wait_until(page, f"caches.match({json.dumps(path('dateonly'))}).then(Boolean)", 10)
+            for name in ("dateonly", "next"):
+                page.goto(f"{BASE}{path(name)}")  # visited online: cached by the worker
+                wait_until(page, f"caches.match({json.dumps(path(name))}).then(Boolean)", 10)
             collect()
 
             context.set_offline(True)
@@ -133,6 +136,23 @@ def main(venv_python: str) -> None:
             page.goto(f"{BASE}{path('late')}")
             page.wait_for_selector("article.occurrence h1", timeout=15_000)
             check(page.text_content("article.occurrence h1") == "late", "an unvisited occurrence page, offline, from IndexedDB")
+            collect()
+
+            # A visited page hidden on the server: the next copy saved online drops it from the
+            # cache (the copy is fresh for 10 minutes, so the clock moves on first).
+            subprocess.run([venv_python, "-m", "tools.e2e_seed", "--hide", "next"], check=True)
+            context.set_offline(False)
+            context.clock.set_fixed_time(NOW + timedelta(minutes=11))
+            page.goto(f"{BASE}/")
+            page.wait_for_selector("html[data-offline-copy=saved]", state="attached", timeout=30_000)
+            hidden = json.dumps(path("next"))
+            wait_until(page, f"caches.open('agenda-pages').then((c) => c.match({hidden})).then((r) => !r)", 10)
+            check(True, "a page hidden on the server is dropped from the cache when the copy is refreshed")
+            context.set_offline(True)
+            page.goto(f"{BASE}{path('next')}")
+            page.wait_for_selector("main p.empty", timeout=15_000)
+            check("next" not in titles(page, "main h1") and "pas été enregistrée" in page.text_content("main"),
+                  "the hidden page is not served offline")
             collect()
             browser.close()
         check(not violations, f"no Content-Security-Policy violation {violations}")

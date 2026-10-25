@@ -1,10 +1,12 @@
 """Seeds the e2e database: the small area and the shared filter cases' occurrences.
 
 Run as `python -m tools.e2e_seed` by tools/e2e_offline.py, with the app's venv, against the postgis-fixture database.
+`python -m tools.e2e_seed --hide <name>` hides that event instead, as a moderator would.
 """
 
 import json
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,6 +23,14 @@ from tests.helpers import import_event  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = json.loads((ROOT / "tests/fixtures/filter-cases.json").read_text(encoding="utf-8"))
 SYNCED = datetime(2026, 10, 31, 5, 2, tzinfo=UTC)
+
+if sys.argv[1:2] == ["--hide"]:
+    from agenda import moderation  # noqa: E402
+    from agenda.models import Event  # noqa: E402
+
+    moderation.hide(Event.objects.get(name=sys.argv[2]), "e2e: hidden by a moderator", None)
+    print(f"e2e seed: {sys.argv[2]!r} hidden")
+    sys.exit(0)
 
 call_command("migrate", verbosity=0)
 call_command(
