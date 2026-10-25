@@ -72,7 +72,8 @@ STATUSES = ["scheduled", "rescheduled", "postponed", "cancelled"]
 
 
 class Event(CanonicalModel):
-    id = models.CharField(primary_key=True, max_length=20)  # evt_<hash of key>
+    # Byte order ("C"): lists sort by id the same way in every locale, and in JS.
+    id = models.CharField(primary_key=True, max_length=20, db_collation="C")  # evt_<hash of key>
     key = models.CharField(max_length=250, unique=True)  # the claims' event key
     # "<name>-<url_key>": the url_key part never changes, so a renamed event keeps its pages.
     slug = models.CharField(max_length=120)
@@ -100,7 +101,7 @@ class Event(CanonicalModel):
 
 
 class Occurrence(CanonicalModel):
-    id = models.CharField(primary_key=True, max_length=20)  # occ_<hash of key>
+    id = models.CharField(primary_key=True, max_length=20, db_collation="C")  # occ_<hash of key>
     key = models.CharField(max_length=262, unique=True)  # "<event key>/<local_date>"
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="occurrences")
     local_date = models.DateField()
