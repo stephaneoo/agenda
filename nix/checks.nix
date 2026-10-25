@@ -1,4 +1,8 @@
 # Checks run by `nix flake check`. The deploy refuses to go ahead if any fails.
+#
+# The build sandbox has no .git, so the expand/contract migration lint, which needs the
+# deploy tags, can't live here: it is the `check-migrations` app, and `nix run .#check`
+# runs both.
 {
   lib,
   self,
@@ -8,13 +12,17 @@
   geoEnv,
 }:
 let
-  # A writable copy of the repo for tools that want to write next to the sources.
-  withSource = name: script:
+  # Runs a script from a writable copy of the repo.
+  withSource =
+    name: script:
     pkgs.runCommand name
       (
         geoEnv
         // {
-          nativeBuildInputs = [ venv ];
+          nativeBuildInputs = [
+            venv
+            pkgs.git
+          ];
           AGENDA_DEV = "1";
         }
       )
@@ -30,5 +38,9 @@ in
 {
   pytest = withSource "agenda-pytest" ''
     ${postgisFixture}/bin/postgis-fixture pytest -p no:cacheprovider
+  '';
+
+  openapi = withSource "agenda-openapi" ''
+    python -m tools.check_openapi
   '';
 }

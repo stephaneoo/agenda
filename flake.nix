@@ -77,6 +77,30 @@
             fi
             exec ${venv}/bin/pytest "$@"
           '';
+          checkMigrations = pkgs.writeShellApplication {
+            name = "check-migrations";
+            runtimeInputs = [
+              venv
+              pkgs.git
+              postgisFixture
+            ];
+            text = ''
+              ${lib.concatStrings (lib.mapAttrsToList (k: v: "export ${k}=${v}\n") geoEnv)}
+              # Settings only, for rendering SQL: no secret key or host config needed.
+              export AGENDA_DEV=1
+              cd "$(git rev-parse --show-toplevel)"
+              postgis-fixture python -m tools.check_migrations "$@"
+            '';
+          };
+          # Everything the deploy runs: the sandboxed flake checks, then the git-aware ones.
+          checkAll = pkgs.writeShellApplication {
+            name = "check";
+            runtimeInputs = [ checkMigrations ];
+            text = ''
+              nix flake check -L
+              check-migrations
+            '';
+          };
         in
         {
           inherit
@@ -86,6 +110,8 @@
             postgisFixture
             geoEnv
             pytestShim
+            checkMigrations
+            checkAll
             ;
         }
       );
@@ -94,6 +120,17 @@
       packages = forAllSystems (system: {
         venv = perSystem.${system}.venv;
         postgis-fixture = perSystem.${system}.postgisFixture;
+      });
+
+      apps = forAllSystems (system: {
+        check-migrations = {
+          type = "app";
+          program = "${perSystem.${system}.checkMigrations}/bin/check-migrations";
+        };
+        check = {
+          type = "app";
+          program = "${perSystem.${system}.checkAll}/bin/check";
+        };
       });
 
       checks = forAllSystems (

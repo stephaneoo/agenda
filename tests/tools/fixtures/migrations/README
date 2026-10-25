@@ -1,0 +1,2 @@
+Migrations of a throwaway app `shop`, copied into temp git repos by
+tests/tools/test_check_migrations.py. They are not part of any installed app.

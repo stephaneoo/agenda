@@ -15,6 +15,7 @@ dependencies = [
 dev = [
   "pytest>=8.3",
   "pytest-django>=4.9",
+  "django-migration-linter>=5.1",
 ]
 
 # No [build-system]: the project is virtual. The venv carries the dependencies,

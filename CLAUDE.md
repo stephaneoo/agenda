@@ -11,7 +11,11 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
 - `nix develop`: dev shell with Python, Django, pytest, PostgreSQL + PostGIS and uv.
 - `nix develop -c pytest [path]`: run tests. `pytest` in the shell starts an ephemeral PostGIS
   (`nix/postgis-fixture.sh`) unless `DATABASE_URL` is already set.
-- `nix flake check -L`: every check the deploy runs (pytest, and the checks in `nix/checks.nix`).
+- `nix run .#check`: every check the deploy runs: `nix flake check -L` (pytest, OpenAPI diff, see
+  `nix/checks.nix`), then `nix run .#check-migrations`, the expand/contract lint against the latest
+  `deploy-*` tag. That one needs git history, which the flake check sandbox doesn't have.
+- Backward-incompatible migration operations must carry `# contract-of: <app>.<expand_migration>`,
+  naming a migration already present at the last deploy.
 - `uv lock` (inside the dev shell): update `uv.lock` after editing `pyproject.toml`.
 
 On the Mac laptop without Nix, run commands on the dev VM: `tools/dev run '<command>'`, and bring
