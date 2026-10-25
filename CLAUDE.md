@@ -35,14 +35,24 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
   then exits non-zero and names the failed keys. Run it after **any change to the `Source`
   table** (priority, label, licence, external): those don't reproject by themselves.
 - `python manage.py sync_datatourisme`: the nightly DATAtourisme sync (`ingest/sync.py`). Exits 1
-  when a page couldn't be fetched (no withdrawals then). Records its outcome in the status file
+  when a page couldn't be fetched or the run passed its deadline (`AGENDA_SYNC_DEADLINE_SECONDS`,
+  default 900; no withdrawals then). Records its outcome in the status file
   (job `sync-datatourisme`), in `Source` and in `ingest.SyncRun`. A run that would withdraw more
   than 20% of the area's future occurrences is `partial` and withdraws nothing
-  (`--allow-mass-withdrawal` applies them for one run, once upstream is checked); rows refused by
-  `write_claims` also make it `partial`. Every in-area row is rewritten every run (unchanged
+  (`--allow-mass-withdrawal=N`, N being the "withdrawals skipped" of the last partial run,
+  applies them for one run once upstream is checked, and only if the run withdraws exactly N
+  with rows fetched); rows refused by `write_claims` or the database, and rows over 400 dates
+  (`too_many_dates`), also make it `partial`. Every in-area row is rewritten every run (unchanged
   values are no-ops), so a withdrawn date that comes back is listed again; the payload hash
-  only counts unchanged vs updated. One run at a time (advisory lock). Bump
-  `ingest.sync.PARSER_VERSION` when parse or mapping change what a row becomes.
+  only counts unchanged vs updated. One run at a time (advisory lock, two-int4 form, apart from the
+  per-event bigint locks). Bump `ingest.sync.PARSER_VERSION` when parse or mapping change what
+  a row becomes.
+- Upstream hardening (`ingest/datatourisme/client.py`): https only, to `tabular-api.data.gouv.fr`
+  and `www.data.gouv.fr`, no redirects, bodies streamed and capped at 20 MiB decoded,
+  Retry-After capped at 60 s, every row sanitised (no NUL, no lone surrogate). The parser keeps
+  dates within [run date − 1 year, run date + 2 years] (weekly ranges cut, a continuous range
+  kept whole: its start is its URL) and strips C1, bidi and invisible format characters;
+  `source_url` only for `https://data.datatourisme.fr/…`.
 - **Never wrap many `write_claims` calls in one outer transaction** (e.g. a whole sync run):
   each call takes its event's lock until the transaction ends. One event, one transaction.
 - Accepted v1 edge case: the cutoff for a `listed: false` claim (a drop after the occurrence
@@ -72,7 +82,8 @@ generated files back with `tools/dev pull <path>`. The sync sends what `git ls-f
 - `agenda.fields.problem()` must stay total over the projection: any value it accepts, the
   projection can store. Change both together, and keep `tests/agenda/test_fields_total.py`
   generating the new cases. Bounds: years 1912–2200, INSEE communes, `seen_at` at most 5 min
-  in the future, strings capped (name 300, description 10,000, URLs 2,000, others 300).
+  in the future, strings capped (name 300, description 10,000, URLs 2,000, others 300), values
+  nested at most 32 levels.
 - Log untrusted values (event keys, source data) with `%r`, never `%s`.
 - The admin (`agenda/admin.py`) is read-only on `Event`/`Occurrence`; moderators act on each
   object's "Modérer" page, which calls `agenda.moderation` (hide and restore both take a reason).
@@ -82,6 +93,9 @@ generated files back with `tools/dev pull <path>`. The sync sends what `git ls-f
 - Accepted for v1: a moved occurrence's target is moderation-owned (its `listed: true` is a
   moderation claim). If the source later drops the whole event, the target stays shown: hide it
   by hand.
+- `/admin/` answers only loopback `REMOTE_ADDR` (127.0.0.1, ::1: the SSH tunnel), dev mode
+  included; anything else gets a 404 (`agenda_site.site.LoopbackAdminMiddleware`, the same
+  `LOOPBACK` as `/healthz`). The test client is 127.0.0.1.
 - Admin logins are throttled by django-axes (5 failures per username and address, 1 h). Unlock:
   `python manage.py axes_reset_username <name>`. Sessions last 8 h.
 
@@ -96,9 +110,17 @@ generated files back with `tools/dev pull <path>`. The sync sends what `git ls-f
 - `AGENDA_DEV=1`: dev shell and checks only. Enables DEBUG and an insecure dev key. Refused
   when `AGENDA_ENV=production` (set on the host) or under systemd (`INVOCATION_ID`).
 - `AGENDA_SITE_URL`: root of the absolute `url` in API responses (e.g. `https://agenda.example.org`).
-  Empty: the request's own scheme and host.
+  Empty: the request's own scheme and host. Its origin is also the only one the service worker
+  registers on (`<meta name="agenda-origin">`; unset: the request's origin in dev, none outside).
+- `AGENDA_SW_KILL=1`: the service worker kill switch. `/sw.js` then clears every cache of the
+  site and unregisters itself (browsers pick it up on their next visit), and pages unregister
+  instead of registering. Unset it, and redeploy, to bring offline reading back. In production
+  (`AGENDA_ENV=production`) `/sw.js` is a 404 to loopback, so the tunnel registers no worker.
 - `AGENDA_STATUS_FILE`: the status file (`agenda_site.status.record`), default
   `/var/lib/agenda/status.json`. Set it to a scratch path when running jobs in the dev shell.
+  Its directory is created 0750; `record()` logs and writes nothing when the directory is group-
+  or world-writable or another user's, and the lock is never followed through a symlink.
+- `AGENDA_SYNC_DEADLINE_SECONDS`: wall-clock budget of one sync run, default 900.
 - `GDAL_LIBRARY_PATH`, `GEOS_LIBRARY_PATH`: set by the dev shell to the Nix copies.
 
 ## Secrets
