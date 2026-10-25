@@ -14,17 +14,19 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from collections.abc import Collection
 from typing import Any
 
 from django.db import DataError, connection, transaction
 from django.utils import timezone
 
 from claims.keys import event_key_of, year_ok
-from claims.models import Claim, ClaimHistory, Source
+from claims.models import Claim, ClaimHistory, Source, claims_writer
 
 
 # Occurrence keys add 11 characters ("/YYYY-MM-DD"); Claim.target_key holds 250.
 MAX_EVENT_KEY = 200
+MODERATION = "moderation"
 # A seen_at later than now plus this is refused: the newest seen_at wins ties and an older
 # write from the same source is ignored, so a claim from the future would be frozen.
 SEEN_AT_TOLERANCE = timedelta(minutes=5)
@@ -95,18 +97,21 @@ def _check(event_key: str, claim: NewClaim, sources: set[str], now: datetime) ->
         raise ValueError(f"{claim.target_key} {claim.field}: {why}")
 
 
-def write_claims(event_key: str, claims: list[NewClaim]) -> None:
+def write_claims(event_key: str, claims: list[NewClaim], *, allowed_sources: Collection[str] | None = None) -> None:
     """Upsert claims of one event, archive replaced values, and reproject the event.
 
     A claim whose value is unchanged is left alone, seen_at included, and so is a write
     older than what the same source already stated. Invalid values raise ValueError before
     anything is written, and so does a seen_at more than SEEN_AT_TOLERANCE in the future.
     All of it happens in one transaction: if the projection fails, nothing is written.
+    With `allowed_sources`, a claim from any other source is refused (moderation_write).
     """
     sources = set(Source.objects.values_list("name", flat=True))
     now = timezone.now()
     for claim in claims:
         _check(event_key, claim, sources, now)
+        if allowed_sources is not None and claim.source not in allowed_sources:
+            raise ValueError(f"source {claim.source!r} is not allowed here")
     try:
         _write(event_key, claims, now)
     except (DataError, OverflowError) as e:
@@ -114,7 +119,7 @@ def write_claims(event_key: str, claims: list[NewClaim]) -> None:
 
 
 def _write(event_key: str, claims: list[NewClaim], now: datetime) -> None:
-    with transaction.atomic():
+    with transaction.atomic(), claims_writer():
         lock_event(event_key)
         changed = False
         for claim in claims:
@@ -141,11 +146,15 @@ def _write(event_key: str, claims: list[NewClaim], now: datetime) -> None:
             _project(event_key)
 
 
-def delete_claim(target_type: str, target_key: str, field: str, source: str) -> None:
+def delete_claim(
+    target_type: str, target_key: str, field: str, source: str, *, allowed_sources: Collection[str] | None = None
+) -> None:
     """Delete one claim (e.g. a moderator's override), archive it, and reproject its event."""
     event_key = event_key_of(target_type, target_key)
     if event_key is None:
         raise ValueError(f"malformed target: {target_type} {target_key!r}")
+    if allowed_sources is not None and source not in allowed_sources:
+        raise ValueError(f"source {source!r} is not allowed here")
     try:
         _delete(event_key, target_type, target_key, field, source)
     except (DataError, OverflowError) as e:
@@ -153,7 +162,7 @@ def delete_claim(target_type: str, target_key: str, field: str, source: str) -> 
 
 
 def _delete(event_key: str, target_type: str, target_key: str, field: str, source: str) -> None:
-    with transaction.atomic():
+    with transaction.atomic(), claims_writer():
         lock_event(event_key)
         claim = (
             Claim.objects.select_for_update()
@@ -165,6 +174,17 @@ def _delete(event_key: str, target_type: str, target_key: str, field: str, sourc
         _archive(claim, timezone.now(), "deleted")
         claim.delete()
         _project(event_key)
+
+
+def moderation_write(event_key: str, claims: list[NewClaim]) -> None:
+    """write_claims for the admin and agenda.moderation: source="moderation" claims only, so
+    a moderation form can never forge another source's claim."""
+    write_claims(event_key, claims, allowed_sources={MODERATION})
+
+
+def moderation_delete(target_type: str, target_key: str, field: str) -> None:
+    """delete_claim of a moderation claim ("restore" removes the override)."""
+    delete_claim(target_type, target_key, field, MODERATION, allowed_sources={MODERATION})
 
 
 def _archive(claim: Claim, when: datetime, action: str) -> None:

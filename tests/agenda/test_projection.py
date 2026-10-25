@@ -8,7 +8,7 @@ from agenda.categories import SLUGS
 from agenda.models import CanonicalWriteError, Event, Occurrence, projection_writer
 from agenda.projection import project_event, rebuild_all
 from claims.keys import event_key_of, occurrence_key
-from claims.models import Claim
+from claims.models import Claim, claims_writer
 from claims.services import NewClaim, delete_claim, write_claims
 from tests.helpers import T0, dates_value, import_event, location, moderate
 
@@ -143,7 +143,8 @@ def test_invalid_values_fall_back() -> None:
     import_event(KEY, loc=location(lat=44.36, lon=5.14))
     with pytest.raises(ValueError):
         import_event(KEY, category="nope")
-    Claim.objects.filter(field="category").update(value="nope")  # a claim from before validation
+    with claims_writer():
+        Claim.objects.filter(field="category").update(value="nope")  # a claim from before validation
     rebuild_all()
     e = Event.objects.get()
     assert e.category == "autre"
@@ -248,16 +249,18 @@ def test_rebuild_equals_incremental() -> None:
                 write_claims(key, [claim])
             except ValueError:
                 # Refused now, but such rows may predate validation: the projection must cope.
-                Claim.objects.update_or_create(
-                    target_type=claim.target_type, target_key=claim.target_key, field=claim.field,
-                    source_id=claim.source, defaults={"value": claim.value, "seen_at": claim.seen_at, "event_key": key},
-                )
+                with claims_writer():
+                    Claim.objects.update_or_create(
+                        target_type=claim.target_type, target_key=claim.target_key, field=claim.field,
+                        source_id=claim.source, defaults={"value": claim.value, "seen_at": claim.seen_at, "event_key": key},
+                    )
                 project_event(key)
         incremental = snapshot()
         with projection_writer():
             Event.objects.all().delete()
         rebuild_all()
         assert snapshot() == incremental, f"case {case}"
-        Claim.objects.all().delete()
+        with claims_writer():
+            Claim.objects.all().delete()
         rebuild_all()
         assert not Event.objects.exists() and not Occurrence.objects.exists()

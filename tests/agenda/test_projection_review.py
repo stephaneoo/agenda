@@ -12,7 +12,7 @@ from agenda import projection
 from agenda.models import CanonicalWriteError, Event, Occurrence
 from agenda.projection import occurrence_id, project_event, rebuild_all
 from claims.keys import occurrence_key
-from claims.models import Claim
+from claims.models import Claim, claims_writer
 from claims.services import NewClaim, write_claims
 from tests.helpers import T0, dates_value, import_event, location, moderate
 
@@ -32,8 +32,9 @@ def occ(d: date, key: str = KEY) -> Occurrence:
 
 def legacy(key: str, target_type: str, target_key: str, field: str, value: object, source: str = "moderation") -> None:
     """A claim written before validation existed, straight into the table, then reprojected."""
-    Claim.objects.create(target_type=target_type, target_key=target_key, event_key=key, field=field,
-                         value=value, source_id=source, seen_at=T0)
+    with claims_writer():
+        Claim.objects.create(target_type=target_type, target_key=target_key, event_key=key, field=field,
+                             value=value, source_id=source, seen_at=T0)
     project_event(key)
 
 
@@ -152,7 +153,8 @@ def test_rebuild_holds_one_event_lock_at_a_time(monkeypatch: pytest.MonkeyPatch)
 def test_rebuild_drops_events_without_claims_and_is_idempotent() -> None:
     import_event("datatourisme:a")
     import_event("datatourisme:b")
-    Claim.objects.filter(event_key="datatourisme:b").delete()
+    with claims_writer():
+        Claim.objects.filter(event_key="datatourisme:b").delete()
     rebuild_all()
     assert list(Event.objects.values_list("key", flat=True)) == ["datatourisme:a"]
     before = list(Occurrence.objects.values_list("id", "updated_at"))
