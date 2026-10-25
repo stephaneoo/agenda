@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     "geo",
     "claims",
     "agenda",
+    "ingest",
     "api",
     "web",
 ]
@@ -127,6 +128,9 @@ USE_TZ = True
 
 # Root of the absolute URLs in the API (e.g. https://agenda.example.org). Empty: the request's host.
 SITE_URL = os.environ.get("AGENDA_SITE_URL", "").rstrip("/")
+
+# Each timer job's last outcome (agenda_site.status), rendered by the MOTD.
+STATUS_FILE = os.environ.get("AGENDA_STATUS_FILE", "/var/lib/agenda/status.json")
 
 STATIC_URL = "static/"
 STATIC_ROOT = os.environ.get("DJANGO_STATIC_ROOT", str(BASE_DIR / "staticfiles"))

@@ -1,0 +1,13 @@
+{
+ "status": 400,
+ "url": "https://tabular-api.data.gouv.fr/api/resources/2c6023f2-ffce-4c1a-9728-bdc020e463b5/data/?Latitude__nope=1&page_size=25",
+ "body": {
+  "errors": [
+   {
+    "code": null,
+    "title": "Invalid query string",
+    "detail": "Malformed query: argument 'Latitude__nope=1' could not be parsed"
+   }
+  ]
+ }
+}

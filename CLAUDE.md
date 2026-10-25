@@ -29,6 +29,12 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
   the claims, one event per transaction. An event that fails is logged and skipped; the command
   then exits non-zero and names the failed keys. Run it after **any change to the `Source`
   table** (priority, label, licence, external): those don't reproject by themselves.
+- `python manage.py sync_datatourisme`: the nightly DATAtourisme sync (`ingest/sync.py`). Exits 1
+  when a page couldn't be fetched (no withdrawals then). Records its outcome in the status file
+  (job `sync-datatourisme`), in `Source` and in `ingest.SyncRun`. A run that would withdraw more
+  than 20% of the area's future occurrences is `partial` and withdraws nothing. Bump
+  `ingest.sync.PARSER_VERSION` when parse or mapping change what a row becomes: unchanged
+  payloads are skipped by hash.
 - **Never wrap many `write_claims` calls in one outer transaction** (e.g. a whole sync run):
   each call takes its event's lock until the transaction ends. One event, one transaction.
 - Accepted v1 edge case: the cutoff for a `listed: false` claim (a drop after the occurrence
@@ -70,6 +76,8 @@ generated files back with `tools/dev pull <path>`. The sync sends what `git ls-f
   when `AGENDA_ENV=production` (set on the host) or under systemd (`INVOCATION_ID`).
 - `AGENDA_SITE_URL`: root of the absolute `url` in API responses (e.g. `https://agenda.example.org`).
   Empty: the request's own scheme and host.
+- `AGENDA_STATUS_FILE`: the status file (`agenda_site.status.record`), default
+  `/var/lib/agenda/status.json`. Set it to a scratch path when running jobs in the dev shell.
 - `GDAL_LIBRARY_PATH`, `GEOS_LIBRARY_PATH`: set by the dev shell to the Nix copies.
 
 ## Secrets

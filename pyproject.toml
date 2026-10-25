@@ -9,6 +9,7 @@ dependencies = [
   "django-ninja>=1.4,<2",
   "dj-database-url>=2.3",
   "psycopg[binary]>=3.2",
+  "requests>=2.32",
 ]
 
 [dependency-groups]
