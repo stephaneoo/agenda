@@ -5,6 +5,7 @@ import pytest
 from django.test import Client
 from django.urls import get_resolver
 
+from agenda import read
 from agenda.models import Event, Occurrence
 from claims.keys import occurrence_key
 from claims.models import Source
@@ -123,7 +124,8 @@ def test_get_occurrence_404_410_301(client: Client, events: None) -> None:
     assert response["Location"] == f"/api/v1/occurrences/{new.id}"
 
 
-def test_event_includes_future_published_occurrences(client: Client, events: None) -> None:
+def test_event_includes_future_published_occurrences(client: Client, events: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(read, "today", lambda: date(2026, 11, 1))
     event = Event.objects.get(key="datatourisme:marche")
     moderate(event.key, "occurrence", occurrence_key(event.key, date(2026, 11, 12)), "visibility", {"value": "hidden", "reason": "x"})
     response, body = get(client, f"/api/v1/events/{event.id}")

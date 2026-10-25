@@ -16,6 +16,7 @@ from agenda.categories import SLUGS
 from agenda.models import Event, Occurrence
 from agenda.timeutil import day_start, format_local, today
 from claims.models import Claim, Source
+from geo.models import MatrixInfo
 from geo.services import covered_communes, reachable
 
 MAX_WITHIN = 60
@@ -192,6 +193,17 @@ def sync_status() -> dict[str, Any]:
         sources.append({"name": s.label, "last_success": s.last_success_at, "last_run": s.last_run_at, "last_outcome": s.last_outcome})
     successes = [s["last_success"] for s in sources if s["last_success"]]
     return {"last_sync": max(successes) if successes else None, "sources": sources}
+
+
+def area_communes() -> list[tuple[str, str]]:
+    """(INSEE code, name) of the covered communes, by name."""
+    return sorted(covered_communes().values_list("insee", "name"), key=lambda c: (c[1], c[0]))
+
+
+def default_origin() -> str:
+    """The commune the covered area is measured from (Nyons)."""
+    info = MatrixInfo.objects.first()
+    return info.origin_for_area if info else "26220"
 
 
 # --- Serialisation (the API's occurrence and event objects) ------------------------------

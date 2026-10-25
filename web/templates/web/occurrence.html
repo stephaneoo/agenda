@@ -1,0 +1,25 @@
+{% extends "web/base.html" %}
+{% load web_tags %}
+{% block title %}{{ event.name }} — {{ row.start|date:"j F Y" }}{% endblock %}
+{% block head %}{{ jsonld|ldjson }}{% endblock %}
+{% block content %}
+<article class="occurrence">
+  <h1>{{ event.name }}</h1>
+  {% if over %}<p class="over">Cet événement est terminé.</p>{% endif %}
+  {% if row.status_label %}<p class="status status-{{ occ.status }}">{{ row.status_label }}{% if occ.status == "rescheduled" and previous %} (initialement prévu le {% if previous_has_time %}{{ previous|date:"j F Y à H:i" }}{% else %}{{ previous|date:"j F Y" }}{% endif %}){% endif %}</p>{% endif %}
+  <dl>
+    <dt>Date</dt>
+    <dd>{% if row.has_time %}{{ row.start|date:"l j F Y, H:i" }}{% else %}{{ row.start|date:"l j F Y" }}{% endif %}{% if row.end %} – {% if row.end_has_time %}{{ row.end|date:"l j F Y, H:i" }}{% else %}{{ row.end|date:"l j F Y" }}{% endif %}{% endif %}</dd>
+    <dt>Lieu</dt>
+    <dd>{% if event.location.name %}{{ event.location.name }}, {% endif %}{% if event.location.street %}{{ event.location.street }}, {% endif %}{{ event.location.postal_code }} {{ event.location.commune_name }}</dd>
+    <dt>Catégorie</dt>
+    <dd>{{ row.category_label }}</dd>
+    {% if event.organizer %}<dt>Organisateur</dt>
+    <dd>{% if event.organizer.url %}<a href="{{ event.organizer.url }}" rel="nofollow noopener">{{ event.organizer.name }}</a>{% else %}{{ event.organizer.name }}{% endif %}</dd>{% endif %}
+    {% if event.offers %}<dt>Tarif</dt>
+    <dd>{% if event.offers.is_free %}Gratuit{% elif event.offers.price %}{{ event.offers.price }}{% else %}Payant{% endif %}{% if event.offers.url %} · <a href="{{ event.offers.url }}" rel="nofollow noopener">billetterie</a>{% endif %}</dd>{% endif %}
+  </dl>
+  {% if event.description %}<div class="description">{{ event.description|linebreaks }}</div>{% endif %}
+  <p class="attribution">{% for s in sources %}Source : {% if s.url %}<a href="{{ s.url }}" rel="nofollow noopener">{{ s.name }}</a>{% else %}{{ s.name }}{% endif %} ({{ s.licence }}), mise à jour le {{ s.updated|date:"j F Y" }}.{% if not forloop.last %} {% endif %}{% endfor %}</p>
+</article>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "web/base.html" %}
+{% block content %}
+<form class="filters" method="get" action="/">
+  <label>Commune
+    <select name="commune">{% for insee, name in communes %}
+      <option value="{{ insee }}"{% if insee == commune %} selected{% endif %}>{{ name }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Rayon
+    <select name="rayon">{% for r in radii %}
+      <option value="{{ r }}"{% if r == radius %} selected{% endif %}>{% if r == 0 %}cette commune{% else %}{{ r }} min{% endif %}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Dates
+    <select name="periode">{% for value, label in periods.items %}
+      <option value="{{ value }}"{% if value == period %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+  <fieldset class="categories"><legend>Catégories</legend>{% for slug, label in categories.items %}
+    <label><input type="checkbox" name="categorie" value="{{ slug }}"{% if slug in selected_categories %} checked{% endif %}> {{ label }}</label>{% endfor %}
+  </fieldset>
+  <button type="submit">Filtrer</button>
+</form>
+
+{% if not count %}<p class="empty">Aucun événement pour ces critères.</p>{% endif %}
+
+{% if ongoing %}
+<section class="day">
+  <h2>En cours</h2>
+  <ul class="rows">{% for row in ongoing %}
+    <li>{% include "web/row.html" with spanning=True %}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% for day in days %}
+<section class="day">
+  <h2>{{ day.day|date:"l j F" }}</h2>
+  <ul class="rows">{% for row in day.rows %}
+    <li>{% include "web/row.html" %}</li>{% endfor %}
+  </ul>
+</section>
+{% endfor %}
+{% endblock %}

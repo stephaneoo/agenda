@@ -1,0 +1,20 @@
+{% extends "web/base.html" %}
+{% block title %}À propos — Agenda autour de Nyons{% endblock %}
+{% block content %}
+<article class="about">
+  <h1>À propos</h1>
+  <h2>Sources</h2>
+  <ul>{% for s in sync.sources %}
+    <li>{{ s.name }} : dernière synchronisation réussie {% if s.last_success %}le {{ s.last_success|date:"j F Y à H:i" }}{% else %}jamais{% endif %}{% if s.last_outcome == "partial" %} (synchronisation partielle : les retraits ont été suspendus){% elif s.last_outcome == "failed" %} (la dernière tentative a échoué{% if s.last_run %} le {{ s.last_run|date:"j F Y à H:i" }}{% endif %}){% endif %}.</li>{% empty %}
+    <li>Aucune synchronisation pour l'instant.</li>{% endfor %}
+  </ul>
+  <h2>Licences</h2>
+  <ul>
+    <li>Données : <a href="https://www.etalab.gouv.fr/licence-ouverte-open-licence/">Licence Ouverte / Etalab 2.0</a>. Les événements viennent de DATAtourisme ; chaque page cite sa source et sa date de mise à jour.</li>
+    <li>Code : AGPL-3.0 ou ultérieure.</li>
+    <li>Le nom et le logo du site sont réservés.</li>
+  </ul>
+  <h2>Charte éditoriale</h2>
+  {% include "web/charte.html" %}
+</article>
+{% endblock %}

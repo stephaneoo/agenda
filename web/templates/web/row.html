@@ -1,0 +1,5 @@
+<span class="time">{% if spanning %}jusqu'au {{ row.end|date:"j M" }}{% elif row.has_time %}{{ row.start|date:"H:i" }}{% else %}journée{% endif %}</span>
+<span class="cat">{{ row.category_label }}</span>
+<a class="title" href="{{ row.occ.get_absolute_url }}">{{ row.occ.event.name }}</a>
+<span class="commune">{{ row.occ.event.location.commune_name }}</span>{% if row.status_label %}
+<span class="status status-{{ row.occ.status }}">{{ row.status_label }}</span>{% endif %}
