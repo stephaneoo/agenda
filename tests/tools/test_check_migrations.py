@@ -32,8 +32,31 @@ class Repo:
         git(self.root, "add", "-A")
         git(self.root, "commit", "-qm", "add " + " ".join(names))
 
+    def write(self, name: str, source: str, *, commit: bool = True) -> None:
+        (self.migrations / f"{name}.py").write_text(source)
+        if commit:
+            git(self.root, "add", "-A")
+            git(self.root, "commit", "-qm", f"write {name}")
+
+    def remove(self, name: str) -> None:
+        git(self.root, "rm", "-q", f"shop/migrations/{name}.py")
+        git(self.root, "commit", "-qm", f"remove {name}")
+
     def deploy(self) -> None:
         git(self.root, "tag", BASE_TAG)
+
+
+def remove_price(ref: str, dependency: str = "0002_price_nullable") -> str:
+    return f"""from django.db import migrations
+
+
+class Migration(migrations.Migration):
+    dependencies = [("shop", "{dependency}")]
+    operations = [
+        # contract-of: {ref}
+        migrations.RemoveField(model_name="product", name="price"),
+    ]
+"""
 
 
 @pytest.fixture
@@ -97,3 +120,93 @@ def test_add_not_null_without_default_fails(repo: Repo) -> None:
     repo.deploy()
     repo.add("0002_add_sku_not_null")
     assert migrations_of(check_migrations(BASE_TAG, repo.root)) == {"shop.0002_add_sku_not_null"}
+
+
+@pytest.mark.django_db
+def test_contract_of_unrelated_migration_fails(repo: Repo) -> None:
+    # The initial migration created the field but is no expand step for its removal.
+    repo.add("0001_initial", "0002_price_nullable")
+    repo.deploy()
+    repo.write("0003_remove_price", remove_price("shop.0001_initial"))
+    assert migrations_of(check_migrations(BASE_TAG, repo.root)) == {"shop.0003_remove_price"}
+
+
+@pytest.mark.django_db
+def test_contract_of_expand_of_another_field_fails(repo: Repo) -> None:
+    repo.add("0001_initial", "0002_add_note_nullable")
+    repo.deploy()
+    repo.write("0003_remove_price", remove_price("shop.0002_add_note_nullable", "0002_add_note_nullable"))
+    assert migrations_of(check_migrations(BASE_TAG, repo.root)) == {"shop.0003_remove_price"}
+
+
+@pytest.mark.django_db
+def test_contract_of_other_app_fails(repo: Repo) -> None:
+    repo.add("0001_initial", "0002_price_nullable")
+    repo.deploy()
+    repo.write("0003_remove_price", remove_price("auth.0002_price_nullable"))
+    assert migrations_of(check_migrations(BASE_TAG, repo.root)) == {"shop.0003_remove_price"}
+
+
+@pytest.mark.django_db
+def test_contract_of_expand_leaving_field_not_null_fails(repo: Repo) -> None:
+    repo.add("0001_initial", "0002_price_default")
+    repo.deploy()
+    repo.write("0003_remove_price", remove_price("shop.0002_price_default", "0002_price_default"))
+    violations = check_migrations(BASE_TAG, repo.root)
+    assert migrations_of(violations) == {"shop.0003_remove_price"}
+    assert "nullable" in violations[0].message
+
+
+@pytest.mark.django_db
+def test_migration_file_without_number_is_linted(repo: Repo) -> None:
+    repo.add("0001_initial")
+    repo.deploy()
+    shutil.copy(FIXTURES / "0002_remove_price_plain.py", repo.migrations / "remove_price.py")
+    git(repo.root, "add", "-A")
+    git(repo.root, "commit", "-qm", "unnumbered")
+    assert migrations_of(check_migrations(BASE_TAG, repo.root)) == {"shop.remove_price"}
+
+
+@pytest.mark.django_db
+def test_contract_comment_on_other_operation_does_not_cover_breaking_one(repo: Repo) -> None:
+    repo.add("0001_initial", "0002_price_nullable")
+    repo.deploy()
+    repo.write("0003_two_ops", """from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+    dependencies = [("shop", "0002_price_nullable")]
+    operations = [
+        # contract-of: shop.0002_price_nullable
+        migrations.AddField(model_name="product", name="note", field=models.TextField(null=True)),
+        migrations.RemoveField(model_name="product", name="price"),
+    ]
+""")
+    violations = check_migrations(BASE_TAG, repo.root)
+    assert any(v.migration == "shop.0003_two_ops" and v.operation == 1 for v in violations)
+
+
+@pytest.mark.django_db
+def test_editing_deployed_migration_fails(repo: Repo) -> None:
+    repo.add("0001_initial")
+    repo.deploy()
+    path = repo.migrations / "0001_initial.py"
+    path.write_text(path.read_text() + "# edited\n")
+    git(repo.root, "commit", "-qam", "edit")
+    assert migrations_of(check_migrations(BASE_TAG, repo.root)) == {"shop.0001_initial"}
+
+
+@pytest.mark.django_db
+def test_untracked_breaking_migration_fails(repo: Repo) -> None:
+    repo.add("0001_initial")
+    repo.deploy()
+    shutil.copy(FIXTURES / "0002_remove_price_plain.py", repo.migrations / "0002_remove_price_plain.py")
+    assert migrations_of(check_migrations(BASE_TAG, repo.root)) == {"shop.0002_remove_price_plain"}
+
+
+@pytest.mark.django_db
+def test_deleting_deployed_migration_fails(repo: Repo) -> None:
+    repo.add("0001_initial", "0002_add_note_nullable")
+    repo.deploy()
+    repo.remove("0002_add_note_nullable")
+    assert migrations_of(check_migrations(BASE_TAG, repo.root)) == {"shop.0002_add_note_nullable"}
