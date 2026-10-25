@@ -27,15 +27,6 @@
 {% if truncated %}<p class="notice">Liste tronquée : seuls les {{ count }} premiers événements sont affichés. Réduisez le rayon, les dates ou les catégories.</p>{% endif %}
 {% if not count %}<p class="empty">Aucun événement pour ces critères.</p>{% endif %}
 
-{% if ongoing %}
-<section class="day">
-  <h2>En cours</h2>
-  <ul class="rows">{% for row in ongoing %}
-    <li>{% include "web/row.html" with spanning=True %}</li>{% endfor %}
-  </ul>
-</section>
-{% endif %}
-
 {% for day in days %}
 <section class="day">
   <h2>{{ day.day|date:"l j F" }}</h2>
@@ -44,5 +35,14 @@
   </ul>
 </section>
 {% endfor %}
+
+{% if ongoing %}
+<details class="ongoing">
+  <summary>En cours / toute la période ({{ ongoing|length }})</summary>
+  <ul class="rows">{% for row in ongoing %}
+    <li>{% include "web/row.html" with spanning=True %}</li>{% endfor %}
+  </ul>
+</details>
+{% endif %}
 </div>
 {% endblock %}

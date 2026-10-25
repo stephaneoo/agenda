@@ -92,8 +92,13 @@ function renderList(results, occs, from, labels) {
   const { ongoing, days } = groupForList(occs, from);
   const parts = [];
   if (!occs.length) parts.push(el("p", { class: "empty", text: "Aucun événement pour ces critères." }));
-  if (ongoing.length) parts.push(section("En cours", ongoing.map((o) => row(o, true, labels))));
   for (const d of days) parts.push(section(DAY_HEADING.format(asDay(d.day)), d.rows.map((o) => row(o, false, labels))));
+  // As the server renders it: after the days, collapsed.
+  if (ongoing.length) {
+    parts.push(el("details", { class: "ongoing" },
+      el("summary", { text: `En cours / toute la période (${ongoing.length})` }),
+      el("ul", { class: "rows" }, ...ongoing.map((o) => row(o, true, labels)))));
+  }
   results.replaceChildren(...parts);
 }
 

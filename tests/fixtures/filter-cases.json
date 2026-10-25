@@ -1,5 +1,5 @@
 {
- "about": "Shared by tests/agenda/test_read.py (agenda.read.search_occurrences) and tests/js/filter.test.js (filterOccurrences): same occurrences, same queries, same answers. Occurrences are listed by name; `expected` is in result order (start, then id). Regenerate ids/start/end with the projection's rules. `periods` are the agenda page's date choices (web.views.period_range).",
+ "about": "Shared by tests/agenda/test_read.py (agenda.read.search_occurrences) and tests/js/filter.test.js (filterOccurrences): same occurrences, same queries, same answers. Occurrences are listed by name; `expected` is in result order (start, then id). Regenerate ids/start/end with the projection's rules. `periods` are the agenda page's date choices (web.views.period_range). `groups` are the agenda page's grouping of a result (web.views.group_rows, groupForList in filter.js): dated days first, then the occurrences running more than 24 h.",
  "today": "2026-11-01",
  "slugs": [
   "concert",
@@ -803,6 +803,64 @@
    "today": "2026-11-04",
    "from": "2026-11-04",
    "to": "2026-12-03"
+  }
+ ],
+ "groups": [
+  {
+   "name": "the start clamped to the first day",
+   "query": {
+    "from": "2026-11-03",
+    "to": "2026-11-05"
+   },
+   "ongoing": [
+    "expo",
+    "until4"
+   ],
+   "days": [
+    {
+     "day": "2026-11-03",
+     "rows": [
+      "evening"
+     ]
+    },
+    {
+     "day": "2026-11-04",
+     "rows": [
+      "midnight",
+      "night"
+     ]
+    },
+    {
+     "day": "2026-11-05",
+     "rows": [
+      "dateonly",
+      "late"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "one day, ties by id",
+   "query": {
+    "from": "2026-11-02",
+    "to": "2026-11-02"
+   },
+   "ongoing": [
+    "expo",
+    "until4"
+   ],
+   "days": [
+    {
+     "day": "2026-11-02",
+     "rows": [
+      "allday",
+      "same1",
+      "same3",
+      "same2",
+      "evening"
+     ]
+    }
+   ]
   }
  ]
 }

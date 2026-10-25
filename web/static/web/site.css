@@ -45,3 +45,5 @@ footer.site { color: var(--muted); font-size: .85rem; border-top: 1px solid var(
 /* Offline copy in use (app.js). */
 .banner { max-width: 52rem; margin: 6px auto 0; padding: 4px 12px; background: var(--line); font-size: .9rem; font-weight: 600; }
 .banner[hidden] { display: none; }
+.ongoing { margin-top: 18px; }
+.ongoing summary { font-size: .95rem; font-weight: 700; cursor: pointer; border-bottom: 1px solid var(--line); padding: 2px 0; }

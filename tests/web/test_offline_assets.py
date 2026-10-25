@@ -49,3 +49,17 @@ def test_pages_load_the_app_as_a_module_and_carry_its_hooks(client, small_geo) -
 def test_period_choices_shared_with_the_offline_filter(case: dict) -> None:
     got = views.period_range(case["period"], date.fromisoformat(case["today"]))
     assert got == (date.fromisoformat(case["from"]), date.fromisoformat(case["to"]))
+
+
+@pytest.mark.parametrize("case", FIXTURE["groups"], ids=lambda c: c["name"])
+def test_grouping_shared_with_the_offline_page(case: dict, small_geo) -> None:
+    from agenda.read import search_occurrences
+    from tests.agenda.test_read import _load_filter_occurrences
+
+    names = _load_filter_occurrences()
+    q = case["query"]
+    date_from, date_to = date.fromisoformat(q["from"]), date.fromisoformat(q["to"])
+    items = search_occurrences(None, None, date_from, date_to, [], None, 200).items
+    ongoing, days = views.group_rows(items, date_from)
+    assert [names[r.occ.id] for r in ongoing] == case["ongoing"]
+    assert [{"day": d.day.isoformat(), "rows": [names[r.occ.id] for r in d.rows]} for d in days] == case["days"]

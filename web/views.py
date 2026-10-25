@@ -92,6 +92,20 @@ def _spanning(occ: Occurrence) -> bool:
     return end - start > timedelta(hours=24)
 
 
+def group_rows(items: list[Occurrence], date_from: date) -> tuple[list[Row], list[Day]]:
+    """(ongoing, days) of a sorted list: occurrences running over 24 h apart, the others
+    under their start day (no earlier than date_from). filter.js groupForList does the same."""
+    ongoing, days = [], {}
+    for occ in items:
+        row = _row(occ)
+        if _spanning(occ):
+            ongoing.append(row)
+        else:
+            d = max(occ.start_utc.astimezone(PARIS).date(), date_from)
+            days.setdefault(d, Day(d)).rows.append(row)
+    return ongoing, [days[d] for d in sorted(days)]
+
+
 @require_safe
 def agenda(request: HttpRequest) -> HttpResponse:
     communes = read.area_communes()
@@ -119,18 +133,11 @@ def agenda(request: HttpRequest) -> HttpResponse:
                 break
         truncated = cursor is not None
 
-    ongoing, days = [], {}
-    for occ in items:
-        row = _row(occ)
-        if _spanning(occ):
-            ongoing.append(row)
-        else:
-            d = max(occ.start_utc.astimezone(timezone.get_current_timezone()).date(), date_from)
-            days.setdefault(d, Day(d)).rows.append(row)
+    ongoing, days = group_rows(items, date_from)
     return render(request, "web/agenda.html", {
         "communes": communes, "commune": commune, "radii": RADII, "radius": radius,
         "periods": PERIODS, "period": period, "categories": SLUGS, "selected_categories": categories,
-        "ongoing": ongoing, "days": [days[d] for d in sorted(days)], "count": len(items),
+        "ongoing": ongoing, "days": days, "count": len(items),
         "truncated": truncated,
     })
 

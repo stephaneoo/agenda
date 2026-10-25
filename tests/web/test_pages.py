@@ -96,8 +96,10 @@ def test_spanning_in_en_cours_group_once(client: Client) -> None:
     event("datatourisme:nyons", TODAY + timedelta(days=1), name="Marché de Nyons")
     html = client.get("/").content.decode()
     assert html.count("Exposition d&#x27;automne") == 1
-    en_cours = html.index("En cours")
-    assert en_cours < html.index("Exposition d&#x27;automne") < html.index("vendredi 6 novembre") < html.index("Marché de Nyons")
+    # The dated days come first; the long items after them, collapsed (no JS needed).
+    assert html.index("vendredi 6 novembre") < html.index("Marché de Nyons") < html.index("En cours")
+    assert re.search(r'<details class="ongoing">\s*<summary>En cours / toute la période \(1\)</summary>', html)
+    assert html.index("En cours") < html.index("Exposition d&#x27;automne")
 
 
 def test_footer_shows_last_sync(client: Client) -> None:
@@ -222,8 +224,8 @@ def test_dst_day_rendering_and_en_cours(client: Client, monkeypatch: pytest.Monk
     html = client.get("/").content.decode()
     heading = "dimanche 25 octobre" if day.month == 10 else "dimanche 28 mars"
     en_cours, day_heading = html.index("En cours"), html.index(heading)
-    assert en_cours < html.index("Longue veille") < day_heading < html.index("Journée entière")
-    assert html.index("Nuit blanche") > day_heading
+    assert day_heading < html.index("Journée entière") < en_cours < html.index("Longue veille")
+    assert day_heading < html.index("Nuit blanche") < en_cours
     expected = "02:30" if day.month == 10 else "03:00"  # 02:30 doesn't exist in March
     assert f'<span class="time">{expected}</span>' in html
     page(client, Occurrence.objects.get(key=occurrence_key("datatourisme:night", day)))

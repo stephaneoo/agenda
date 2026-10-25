@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { InvalidQuery, filterOccurrences, isSpanning, parisToday, periodRange } from "../../web/static/web/filter.js";
+import { InvalidQuery, filterOccurrences, groupForList, isSpanning, parisToday, periodRange } from "../../web/static/web/filter.js";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/filter-cases.json", import.meta.url), "utf8"));
 // As GET /api/v1/occurrences serves them (only the fields the filter reads, plus name).
@@ -54,4 +54,14 @@ test("spanning: more than 24 hours on the wall clock", () => {
   assert.equal(isSpanning({ start: "2026-10-25", end: null }), false); // a 25-hour day is still one day
   assert.equal(isSpanning({ start: "2026-11-04T21:00:00+01:00", end: "2026-11-05T01:00:00+01:00" }), false);
   assert.equal(isSpanning({ start: "2026-11-04", end: "2026-11-05" }), true);
+});
+
+test("grouping: days first, then the occurrences running over 24 h (as the server)", () => {
+  for (const g of fixture.groups) {
+    const q = query(g.query);
+    const occs = filterOccurrences(shuffled(served), fixture.matrix, q, context);
+    const { ongoing, days } = groupForList(occs, q.from);
+    assert.deepEqual(ongoing.map((o) => o.name), g.ongoing, g.name);
+    assert.deepEqual(days.map((d) => ({ day: d.day, rows: d.rows.map((o) => o.name) })), g.days, g.name);
+  }
 });
