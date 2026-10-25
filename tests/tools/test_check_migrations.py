@@ -8,7 +8,7 @@ import pytest
 from django.conf import settings
 from django.test import override_settings
 
-from tools.check_migrations import Violation, check_migrations
+from tools.check_migrations import Violation, check_migrations, default_base_ref, resolve_base
 
 FIXTURES = Path(__file__).parent / "fixtures" / "migrations"
 BASE_TAG = "deploy-20261025T000000Z"
@@ -210,3 +210,39 @@ def test_deleting_deployed_migration_fails(repo: Repo) -> None:
     repo.deploy()
     repo.remove("0002_add_note_nullable")
     assert migrations_of(check_migrations(BASE_TAG, repo.root)) == {"shop.0002_add_note_nullable"}
+
+
+def test_default_base_is_latest_well_formed_deploy_tag(repo: Repo) -> None:
+    repo.add("0001_initial")
+    git(repo.root, "tag", "deploy-20261101T120000Z")
+    first = git(repo.root, "rev-parse", "HEAD").strip()
+    repo.add("0002_add_note_nullable")
+    git(repo.root, "tag", "deploy-20261025T000000Z")  # newer commit, older deploy
+    # Tags that sort after the real one but aren't deploy tags.
+    for tag in ["deploy-20261231T235959Z-x", "deploy-zzz", "deploy-99999999T999999Z", "deploy-2026-11-02"]:
+        git(repo.root, "tag", tag)
+    assert default_base_ref(repo.root) == "deploy-20261101T120000Z"
+    assert resolve_base(repo.root, None) == first
+
+
+def test_default_base_without_deploy_tag_is_first_commit(repo: Repo) -> None:
+    repo.add("0001_initial")
+    first = git(repo.root, "rev-parse", "HEAD").strip()
+    repo.add("0002_add_note_nullable")
+    git(repo.root, "tag", "deploy-latest")
+    assert resolve_base(repo.root, None) == first
+
+
+@pytest.mark.parametrize("base", ["-x", "--output=/tmp/pwned", "--all"])
+def test_base_starting_with_dash_is_refused(repo: Repo, base: str) -> None:
+    repo.add("0001_initial")
+    with pytest.raises(ValueError, match="must not start with"):
+        resolve_base(repo.root, base)
+
+
+def test_unknown_base_is_refused(repo: Repo) -> None:
+    repo.add("0001_initial")
+    with pytest.raises(ValueError, match="not a commit"):
+        resolve_base(repo.root, "nope")
+    head = git(repo.root, "rev-parse", "HEAD").strip()
+    assert resolve_base(repo.root, "HEAD") == head

@@ -1,7 +1,7 @@
 """Expand/contract check for Django migrations.
 
 Lints every migration Django would load that wasn't present at the last deploy (the
-latest `deploy-*` tag, or the first commit when there is none) with
+latest `deploy-YYYYMMDDTHHMMSSZ` tag by timestamp, or the first commit when there is none) with
 django-migration-linter's SQL analyser, one operation at a time. A backward-incompatible
 operation fails the check unless it carries a `# contract-of: <app>.<migration>` comment
 naming an expand migration of the same app, already deployed, that acts on the same model
@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tokenize
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,12 +42,38 @@ def _git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
 
 
+DEPLOY_TAG = re.compile(r"^deploy-(\d{8}T\d{6}Z)$")
+
+
 def default_base_ref(repo: Path) -> str:
-    """The latest deploy-* tag, or the first commit when nothing was deployed yet."""
-    tags = sorted(_git(repo, "tag", "--list", "deploy-*").split())
-    if tags:
-        return tags[-1]
+    """The latest deploy tag by its timestamp, or the first commit when nothing was deployed.
+
+    Only tags of the form deploy-YYYYMMDDTHHMMSSZ count, so a stray tag can't move the baseline.
+    """
+    stamped = []
+    for tag in _git(repo, "tag", "--list", "deploy-*").split():
+        if m := DEPLOY_TAG.match(tag):
+            try:
+                stamped.append((datetime.strptime(m[1], "%Y%m%dT%H%M%SZ"), tag))
+            except ValueError:
+                continue
+    if stamped:
+        return max(stamped)[1]
     return _git(repo, "rev-list", "--max-parents=0", "HEAD").split()[-1]
+
+
+def resolve_base(repo: Path, base: str | None) -> str:
+    """The commit `base` (default: default_base_ref) names. Raises ValueError if it can't be one."""
+    base = base or default_base_ref(repo)
+    if base.startswith("-"):
+        raise ValueError(f"--base must not start with '-': {base!r}")
+    proc = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "--end-of-options", f"{base}^{{commit}}"],
+        cwd=repo, capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        raise ValueError(f"--base is not a commit: {base!r}")
+    return proc.stdout.strip()
 
 
 def _contract_refs(source: str) -> dict[int, tuple[str, str]]:
@@ -131,7 +158,7 @@ def _app_migration_dirs(repo: Path) -> dict[str, str]:
 
 
 def _files_at(repo: Path, ref: str) -> set[str]:
-    return set(_git(repo, "ls-tree", "-r", "--name-only", ref).splitlines())
+    return set(_git(repo, "ls-tree", "-r", "--name-only", "--end-of-options", ref).splitlines())
 
 
 def _same_at(repo: Path, ref: str, rel: str) -> bool:
@@ -187,8 +214,10 @@ def check_migrations(base_ref: str, repo: Path | None = None) -> list[Violation]
     from django.db.migrations.loader import MigrationLoader
 
     repo = Path(_git(repo or Path.cwd(), "rev-parse", "--show-toplevel").strip()).resolve()
+    # git sees only the commit hash, never the ref as given.
+    base_commit = resolve_base(repo, base_ref)
     dirs = _app_migration_dirs(repo)
-    at_base = _files_at(repo, base_ref)
+    at_base = _files_at(repo, base_commit)
     loader = MigrationLoader(connection, ignore_no_migrations=True)
     on_disk = {key for key in loader.disk_migrations if key[0] in dirs}
     path_of = {key: f"{dirs[key[0]]}/{key[1]}.py" for key in on_disk}
@@ -203,7 +232,7 @@ def check_migrations(base_ref: str, repo: Path | None = None) -> list[Violation]
                 if (app_label, name) not in on_disk:
                     violations.append(Violation(f"{app_label}.{name}", None, f"deleted after it was deployed at {base_ref}"))
     for key in sorted(deployed):
-        if not _same_at(repo, base_ref, path_of[key]):
+        if not _same_at(repo, base_commit, path_of[key]):
             violations.append(Violation(f"{key[0]}.{key[1]}", None, f"modified after it was deployed at {base_ref}"))
 
     deployed_leaves = [
@@ -242,6 +271,10 @@ def main() -> int:
     django.setup()
     repo = Path(_git(Path.cwd(), "rev-parse", "--show-toplevel").strip())
     base = args.base or default_base_ref(repo)
+    try:
+        resolve_base(repo, base)
+    except ValueError as e:
+        parser.error(str(e))
     violations = check_migrations(base, repo)
     for v in violations:
         where = f"operation {v.operation}" if v.operation is not None else "file"
