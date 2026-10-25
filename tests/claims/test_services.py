@@ -1,6 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from datetime import timezone as dt_timezone
 
 import pytest
+from django.db import DataError
+from django.utils import timezone as dj_timezone
 
 from claims import services
 from claims.models import Claim, ClaimHistory, Source
@@ -95,4 +98,60 @@ def test_delete_claim_archives_and_reprojects(projected: list[str]) -> None:
 def test_write_claims_rejects_claims_outside_the_event(claim: NewClaim) -> None:
     with pytest.raises(ValueError):
         write_claims(KEY, [claim])
+    assert not Claim.objects.exists()
+
+
+# --- Security review H1d: ValueError is the only exception callers catch -----------------
+
+@pytest.mark.parametrize("error", [DataError("value too long for type character varying(5)"), OverflowError("date value out of range")])
+def test_write_claims_turns_database_and_overflow_errors_into_value_error(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    def broken(event_key: str) -> None:
+        raise error
+
+    monkeypatch.setattr(services, "_project", broken)
+    with pytest.raises(ValueError) as caught:
+        write_claims(KEY, [name_claim("Marché")])
+    assert caught.value.__cause__ is error
+    assert not Claim.objects.exists()  # the transaction rolled back
+
+
+@pytest.mark.parametrize("error", [DataError("invalid input"), OverflowError("date value out of range")])
+def test_delete_claim_turns_database_and_overflow_errors_into_value_error(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    occ = f"{KEY}/2026-11-05"
+    write_claims(KEY, [NewClaim("occurrence", occ, "status", "cancelled", "moderation")])
+
+    def broken(event_key: str) -> None:
+        raise error
+
+    monkeypatch.setattr(services, "_project", broken)
+    with pytest.raises(ValueError) as caught:
+        delete_claim("occurrence", occ, "status", "moderation")
+    assert caught.value.__cause__ is error
+    assert Claim.objects.get().value == "cancelled"  # still there
+    assert not ClaimHistory.objects.exists()
+
+
+# --- Security review M1: a future seen_at would freeze the claim -------------------------
+
+def test_seen_at_in_the_future_is_refused() -> None:
+    with pytest.raises(ValueError, match="future"):
+        write_claims(KEY, [name_claim("Marché", dj_timezone.now() + services.SEEN_AT_TOLERANCE + timedelta(seconds=30))])
+    assert not Claim.objects.exists()
+
+
+def test_seen_at_within_the_tolerance_is_accepted() -> None:
+    seen = dj_timezone.now() + services.SEEN_AT_TOLERANCE - timedelta(seconds=30)
+    write_claims(KEY, [name_claim("Marché", seen)])
+    assert Claim.objects.get().seen_at == seen
+    assert services.SEEN_AT_TOLERANCE == timedelta(minutes=5)
+
+
+@pytest.mark.parametrize("seen_at", [datetime(2026, 10, 1, 4, 0), datetime(1, 1, 1, tzinfo=dt_timezone.utc), "2026-10-01"])
+def test_seen_at_must_be_an_aware_datetime_in_range(seen_at: object) -> None:
+    with pytest.raises(ValueError):
+        write_claims(KEY, [name_claim("Marché", seen_at)])  # type: ignore[arg-type]
     assert not Claim.objects.exists()

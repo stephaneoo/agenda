@@ -2,24 +2,32 @@
 
 Call write_claims once per event, each in its own transaction: never wrap many calls in one
 outer transaction, which would hold every event's lock until it commits.
+
+Exception contract: write_claims and delete_claim raise ValueError for anything wrong with
+what they were given, including a value the database or the date arithmetic refuses
+(DataError, OverflowError, chained as __cause__). That is the only exception a caller (a
+sync, the admin) needs to catch per event; anything else is a bug.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from django.db import connection, transaction
+from django.db import DataError, connection, transaction
 from django.utils import timezone
 
-from claims.keys import event_key_of
+from claims.keys import event_key_of, year_ok
 from claims.models import Claim, ClaimHistory, Source
 
 
 # Occurrence keys add 11 characters ("/YYYY-MM-DD"); Claim.target_key holds 250.
 MAX_EVENT_KEY = 200
+# A seen_at later than now plus this is refused: the newest seen_at wins ties and an older
+# write from the same source is ignored, so a claim from the future would be frozen.
+SEEN_AT_TOLERANCE = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -62,7 +70,7 @@ def _same(a: Any, b: Any) -> bool:
     return _canonical(a) == _canonical(b)
 
 
-def _check(event_key: str, claim: NewClaim, sources: set[str]) -> None:
+def _check(event_key: str, claim: NewClaim, sources: set[str], now: datetime) -> None:
     from agenda.fields import problem  # the field rules belong to the projection
 
     if not event_key or len(event_key) > MAX_EVENT_KEY:
@@ -76,6 +84,13 @@ def _check(event_key: str, claim: NewClaim, sources: set[str]) -> None:
         raise ValueError(f"unknown source {claim.source!r}")
     if not claim.field:
         raise ValueError("empty field name")
+    if claim.seen_at is not None:
+        if not isinstance(claim.seen_at, datetime) or claim.seen_at.utcoffset() is None:
+            raise ValueError(f"{claim.target_key} {claim.field}: seen_at must be an aware datetime")
+        if not year_ok(claim.seen_at):
+            raise ValueError(f"{claim.target_key} {claim.field}: seen_at is out of range")
+        if claim.seen_at > now + SEEN_AT_TOLERANCE:
+            raise ValueError(f"{claim.target_key} {claim.field}: seen_at is in the future")
     if (why := problem(claim.target_type, claim.target_key, claim.field, _json(claim.value))) is not None:
         raise ValueError(f"{claim.target_key} {claim.field}: {why}")
 
@@ -85,13 +100,20 @@ def write_claims(event_key: str, claims: list[NewClaim]) -> None:
 
     A claim whose value is unchanged is left alone, seen_at included, and so is a write
     older than what the same source already stated. Invalid values raise ValueError before
-    anything is written. All of it happens in one transaction: if the projection fails,
-    nothing is written.
+    anything is written, and so does a seen_at more than SEEN_AT_TOLERANCE in the future.
+    All of it happens in one transaction: if the projection fails, nothing is written.
     """
     sources = set(Source.objects.values_list("name", flat=True))
-    for claim in claims:
-        _check(event_key, claim, sources)
     now = timezone.now()
+    for claim in claims:
+        _check(event_key, claim, sources, now)
+    try:
+        _write(event_key, claims, now)
+    except (DataError, OverflowError) as e:
+        raise ValueError(f"{event_key!r}: refused by the projection: {e}") from e
+
+
+def _write(event_key: str, claims: list[NewClaim], now: datetime) -> None:
     with transaction.atomic():
         lock_event(event_key)
         changed = False
@@ -124,6 +146,13 @@ def delete_claim(target_type: str, target_key: str, field: str, source: str) -> 
     event_key = event_key_of(target_type, target_key)
     if event_key is None:
         raise ValueError(f"malformed target: {target_type} {target_key!r}")
+    try:
+        _delete(event_key, target_type, target_key, field, source)
+    except (DataError, OverflowError) as e:
+        raise ValueError(f"{event_key!r}: refused by the projection: {e}") from e
+
+
+def _delete(event_key: str, target_type: str, target_key: str, field: str, source: str) -> None:
     with transaction.atomic():
         lock_event(event_key)
         claim = (
