@@ -8,3 +8,7 @@ result
 result-*
 .direnv/
 __pycache__/
+.venv/
+*.pyc
+.pytest_cache/
+staticfiles/

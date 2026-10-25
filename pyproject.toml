@@ -1,0 +1,27 @@
+[project]
+name = "agenda"
+version = "0.1.0"
+description = "Local events agenda around Nyons"
+license = "AGPL-3.0-or-later"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "django>=5.2,<5.3",
+  "django-ninja>=1.4,<2",
+  "dj-database-url>=2.3",
+  "psycopg[binary]>=3.2",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-django>=4.9",
+]
+
+# No [build-system]: the project is virtual. The venv carries the dependencies,
+# and the app runs from the source tree.
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "agenda_site.settings"
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"
