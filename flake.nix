@@ -60,7 +60,11 @@
           postgres = pkgs.postgresql_16.withPackages (p: [ p.postgis ]);
           postgisFixture = pkgs.writeShellApplication {
             name = "postgis-fixture";
-            runtimeInputs = [ postgres ] ++ lib.optional pkgs.stdenv.isLinux pkgs.util-linux;
+            runtimeInputs = [
+              postgres
+              pkgs.coreutils
+            ]
+            ++ lib.optional pkgs.stdenv.isLinux pkgs.util-linux;
             text = builtins.readFile ./nix/postgis-fixture.sh;
           };
           so = pkgs.stdenv.hostPlatform.extensions.sharedLibrary;
