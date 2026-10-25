@@ -7,3 +7,8 @@ from django.http import HttpRequest
 def base_url(request: HttpRequest) -> str:
     """AGENDA_SITE_URL when set (canonical URLs once a domain exists), else the request's own root."""
     return settings.SITE_URL or request.build_absolute_uri("/")
+
+
+def client_ip(request: HttpRequest) -> str:
+    """The peer address for login throttling: REMOTE_ADDR, never X-Forwarded-For."""
+    return request.META.get("REMOTE_ADDR") or ""

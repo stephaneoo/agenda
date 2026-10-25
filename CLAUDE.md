@@ -63,6 +63,11 @@ generated files back with `tools/dev pull <path>`. The sync sends what `git ls-f
   generating the new cases. Bounds: years 1912–2200, INSEE communes, `seen_at` at most 5 min
   in the future, strings capped (name 300, description 10,000, URLs 2,000, others 300).
 - Log untrusted values (event keys, source data) with `%r`, never `%s`.
+- The admin (`agenda/admin.py`) is read-only on `Event`/`Occurrence`; moderators act on each
+  object's "Modérer" page, which calls `agenda.moderation` (hide and restore both take a reason).
+  Saving a `Source` there reprojects everything after the admin's transaction commits.
+- Admin logins are throttled by django-axes (5 failures per username and address, 1 h). Unlock:
+  `python manage.py axes_reset_username <name>`. Sessions last 8 h.
 
 ## Environment
 

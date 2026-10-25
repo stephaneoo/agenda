@@ -1,6 +1,7 @@
 """Django settings for the agenda. Environment variables configure deployment."""
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import dj_database_url
@@ -65,6 +66,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.gis",
+    "axes",
     "geo",
     "claims",
     "agenda",
@@ -84,7 +86,28 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    # Last, as django-axes asks: refuses logins from a locked-out username and address.
+    "axes.middleware.AxesMiddleware",
 ]
+
+AUTHENTICATION_BACKENDS = [
+    "axes.backends.AxesStandaloneBackend",
+    "django.contrib.auth.backends.ModelBackend",
+]
+
+# Login throttling (django-axes): 5 failures for one username from one address lock that
+# pair out for an hour; a success resets the count. The address is REMOTE_ADDR only, never a
+# forwarded header a client could forge. The admin is reached through an SSH tunnel
+# (127.0.0.1) or Caddy's Unix socket (""), so in practice this is per username. Unlock by
+# hand with `manage.py axes_reset_username <name>`.
+AXES_FAILURE_LIMIT = 5
+AXES_COOLOFF_TIME = timedelta(hours=1)
+AXES_LOCKOUT_PARAMETERS = [["username", "ip_address"]]
+AXES_RESET_ON_SUCCESS = True
+AXES_CLIENT_IP_CALLABLE = "agenda_site.site.client_ip"
+
+# The only sessions in v1 are staff: they end after 8 hours.
+SESSION_COOKIE_AGE = 8 * 3600
 
 ROOT_URLCONF = "agenda_site.urls"
 

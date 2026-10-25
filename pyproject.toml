@@ -10,6 +10,7 @@ dependencies = [
   "dj-database-url>=2.3",
   "psycopg[binary]>=3.2",
   "requests>=2.32",
+  "django-axes>=7.0",
 ]
 
 [dependency-groups]

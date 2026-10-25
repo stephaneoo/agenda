@@ -1,0 +1,16 @@
+{% if claims_groups %}
+<fieldset class="module">
+  <h2>Claims (sources de chaque champ)</h2>
+  {% for group in claims_groups %}
+  <table>
+    <caption>{{ group.label }} <small>{{ group.target }}</small></caption>
+    <thead><tr><th>Champ</th><th>Valeur</th><th>Source</th><th>Vu le</th><th>Retenu</th></tr></thead>
+    <tbody>{% for row in group.rows %}
+      <tr><td>{{ row.field }}</td><td><code>{{ row.value }}</code></td><td>{{ row.source }}</td>
+        <td>{{ row.seen_at|date:"j M Y H:i" }}</td>
+        <td>{% if row.wins is None %}par source{% elif row.wins %}oui{% else %}—{% endif %}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  {% endfor %}
+</fieldset>
+{% endif %}
