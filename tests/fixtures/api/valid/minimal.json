@@ -1,0 +1,18 @@
+{
+  "id": "occ_7Hk2pQ",
+  "url": "https://example.org/evenements/marche-de-nyons-2026-11-05/",
+  "event_id": "evt_3aLm9x",
+  "name": "Marché de Nyons",
+  "description": null,
+  "start": "2026-11-05",
+  "end": null,
+  "timezone": "Europe/Paris",
+  "status": "scheduled",
+  "previous_start": null,
+  "category": "marche",
+  "location": { "name": null, "street": null, "postal_code": "26110", "commune": "26220", "commune_name": "Nyons", "lat": null, "lon": null },
+  "organizer": null,
+  "offers": null,
+  "sources": [{ "name": "DATAtourisme", "url": null, "licence": "Licence Ouverte 2.0", "updated_at": "2026-10-24T05:00:00+02:00" }],
+  "updated_at": "2026-10-25T05:02:11+01:00"
+}

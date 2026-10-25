@@ -1,0 +1,40 @@
+{
+  "id": "occ_Q81zr0",
+  "url": "https://example.org/evenements/concert-rock-salle-des-fetes-2026-11-14/",
+  "event_id": "evt_Zp40aa",
+  "name": "Concert rock",
+  "description": "Deux groupes locaux, buvette sur place.",
+  "start": "2026-11-14T21:00:00+01:00",
+  "end": "2026-11-15T01:00:00+01:00",
+  "timezone": "Europe/Paris",
+  "status": "rescheduled",
+  "previous_start": null,
+  "category": "concert",
+  "location": {
+    "name": "Salle des fêtes",
+    "street": "Place de la Mairie",
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": 44.3606,
+    "lon": 5.1406
+  },
+  "organizer": {
+    "name": "Comité des fêtes",
+    "url": null
+  },
+  "offers": {
+    "is_free": false,
+    "price": "8 €",
+    "url": "https://example.org/billets"
+  },
+  "sources": [
+    {
+      "name": "DATAtourisme",
+      "url": "https://data.datatourisme.fr/…",
+      "licence": "Licence Ouverte 2.0",
+      "updated_at": "2026-10-24T05:00:00+02:00"
+    }
+  ],
+  "updated_at": "2026-10-25T05:02:11+01:00"
+}

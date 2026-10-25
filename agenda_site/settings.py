@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     "geo",
     "claims",
     "agenda",
+    "api",
 ]
 
 MIDDLEWARE = [
@@ -118,6 +119,9 @@ LANGUAGE_CODE = "fr-fr"
 TIME_ZONE = "Europe/Paris"
 USE_I18N = True
 USE_TZ = True
+
+# Root of the absolute URLs in the API (e.g. https://agenda.example.org). Empty: the request's host.
+SITE_URL = os.environ.get("AGENDA_SITE_URL", "").rstrip("/")
 
 STATIC_URL = "static/"
 STATIC_ROOT = os.environ.get("DJANGO_STATIC_ROOT", str(BASE_DIR / "staticfiles"))

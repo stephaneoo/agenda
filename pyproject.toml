@@ -16,6 +16,7 @@ dev = [
   "pytest>=8.3",
   "pytest-django>=4.9",
   "django-migration-linter>=5.1",
+  "jsonschema>=4.23",
 ]
 
 [tool.uv]
