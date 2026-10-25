@@ -1,6 +1,7 @@
 {% extends "web/base.html" %}
+{% block page %}agenda{% endblock %}
 {% block content %}
-<form class="filters" method="get" action="/">
+<form class="filters" id="filters" method="get" action="/">
   <label>Commune
     <select name="commune">{% for insee, name in communes %}
       <option value="{{ insee }}"{% if insee == commune %} selected{% endif %}>{{ name }}</option>{% endfor %}
@@ -22,6 +23,7 @@
   <button type="submit">Filtrer</button>
 </form>
 
+<div id="results">
 {% if truncated %}<p class="notice">Liste tronquée : seuls les {{ count }} premiers événements sont affichés. Réduisez le rayon, les dates ou les catégories.</p>{% endif %}
 {% if not count %}<p class="empty">Aucun événement pour ces critères.</p>{% endif %}
 
@@ -42,4 +44,5 @@
   </ul>
 </section>
 {% endfor %}
+</div>
 {% endblock %}

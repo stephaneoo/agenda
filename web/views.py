@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
+from functools import lru_cache
 from datetime import date, datetime, time, timedelta
 
 from django.conf import settings
+from django.contrib.staticfiles import finders
+from django.templatetags.static import static
 from django.db import DatabaseError, connection
 from django.db.migrations.executor import MigrationExecutor
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponsePermanentRedirect, JsonResponse
@@ -199,3 +204,45 @@ def healthz(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"status": "ok" if ok else "unavailable"}, status=status)
     body = {"status": "ok" if ok else "error", "database": database, "migrations": migrations, "debug": settings.DEBUG}
     return JsonResponse(body, status=status)
+
+
+# --- Offline (service worker) --------------------------------------------------------------
+
+SW_ASSETS = ["web/site.css", "web/app.js", "web/filter.js", "web/store.js"]
+SW_REFERENCE = ["/api/v1/communes", "/api/v1/travel-times", "/api/v1/categories", "/api/v1/status"]
+
+
+def _read_static(name: str) -> bytes:
+    path = finders.find(name)
+    if not path:
+        raise FileNotFoundError(name)
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def _build_service_worker() -> str:
+    urls = ["/", *(static(a) for a in SW_ASSETS), *SW_REFERENCE]
+    source = _read_static("web/sw.js")
+    digest = hashlib.sha256(source)
+    for asset in SW_ASSETS:
+        digest.update(_read_static(asset))
+    digest.update(json.dumps(urls).encode())
+    return (
+        source.decode()
+        .replace('"__VERSION__"', json.dumps(digest.hexdigest()[:16]))
+        .replace("__PRECACHE__", json.dumps(urls))
+    )
+
+
+_cached_service_worker = lru_cache(maxsize=1)(_build_service_worker)
+
+
+@require_safe
+def service_worker(request: HttpRequest) -> HttpResponse:
+    """/sw.js at the root, so its scope is the whole site. Its cache is named after a hash
+    of what it precaches: a deploy that changes any of it installs a new worker."""
+    body = _build_service_worker() if settings.DEBUG else _cached_service_worker()
+    response = HttpResponse(body, content_type="text/javascript; charset=utf-8")
+    response["Service-Worker-Allowed"] = "/"
+    response["Cache-Control"] = "no-cache"
+    return response

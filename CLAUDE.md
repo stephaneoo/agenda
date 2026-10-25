@@ -40,6 +40,9 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
 - Accepted v1 edge case: the cutoff for a `listed: false` claim (a drop after the occurrence
   ended doesn't withdraw it) comes from the occurrence's *current* `dates`. Moving its time
   later on the same day can turn an earlier drop into a withdrawal.
+- `node --test 'tests/js/*.test.js'` (dev shell): the offline filter and store tests, also a flake
+  check. `tests/fixtures/filter-cases.json` is shared with `tests/agenda/test_read.py`: a change to
+  the search rules changes both `agenda/read.py` and `web/static/web/filter.js`.
 - `uv lock` (inside the dev shell): update `uv.lock` after editing `pyproject.toml`. uv only
   resolves releases at least 7 days old (`exclude-newer` in `pyproject.toml`).
 

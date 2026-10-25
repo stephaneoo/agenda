@@ -10,6 +10,8 @@
   venv,
   postgisFixture,
   geoEnv,
+  nodejs,
+  fakeIndexeddb,
 }:
 let
   # Runs a script from a writable copy of the repo.
@@ -38,6 +40,11 @@ in
 {
   pytest = withSource "agenda-pytest" ''
     ${postgisFixture}/bin/postgis-fixture pytest -p no:cacheprovider
+  '';
+
+  # The offline filter and store (web/static/web), on node's test runner.
+  js = withSource "agenda-js" ''
+    FAKE_INDEXEDDB=${fakeIndexeddb} ${nodejs}/bin/node --test 'tests/js/*.test.js'
   '';
 
   openapi = withSource "agenda-openapi" ''

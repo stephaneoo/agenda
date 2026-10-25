@@ -41,3 +41,7 @@ footer.site { color: var(--muted); font-size: .85rem; border-top: 1px solid var(
 .occurrence dt { color: var(--muted); }
 .occurrence dd { margin: 0; }
 .attribution { font-size: .85rem; color: var(--muted); }
+
+/* Offline copy in use (app.js). */
+.banner { max-width: 52rem; margin: 6px auto 0; padding: 4px 12px; background: var(--line); font-size: .9rem; font-weight: 600; }
+.banner[hidden] { display: none; }

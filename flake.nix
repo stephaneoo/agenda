@@ -108,6 +108,13 @@
             '';
           };
           travelMatrix = import ./nix/travel-matrix.nix { inherit lib pkgs venv geoEnv; };
+          # JS unit tests (tests/js) run on node's own test runner; IndexedDB is faked with
+          # fake-indexeddb, pinned here (Apache-2.0, no dependencies).
+          nodejs = pkgs.nodejs;
+          fakeIndexeddb = pkgs.fetchzip {
+            url = "https://registry.npmjs.org/fake-indexeddb/-/fake-indexeddb-6.2.5.tgz";
+            hash = "sha256-r3vi0MU+nBY9fPr2rW8Cw2Z1YkGAkQhf4x0wVhlC6+8=";
+          };
         in
         {
           inherit
@@ -120,6 +127,8 @@
             checkMigrations
             checkAll
             travelMatrix
+            nodejs
+            fakeIndexeddb
             ;
         }
       );
@@ -154,6 +163,8 @@
             venv
             postgisFixture
             geoEnv
+            nodejs
+            fakeIndexeddb
             ;
         }
       );
@@ -172,9 +183,11 @@
               s.postgisFixture
               s.postgres
               s.pkgs.uv
+              s.nodejs
             ];
             env = s.geoEnv // {
               AGENDA_DEV = "1";
+              FAKE_INDEXEDDB = "${s.fakeIndexeddb}";
               UV_NO_SYNC = "1";
               UV_PYTHON = "${s.venv}/bin/python";
               UV_PYTHON_DOWNLOADS = "never";

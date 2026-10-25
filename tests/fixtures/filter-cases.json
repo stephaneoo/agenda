@@ -1,0 +1,808 @@
+{
+ "about": "Shared by tests/agenda/test_read.py (agenda.read.search_occurrences) and tests/js/filter.test.js (filterOccurrences): same occurrences, same queries, same answers. Occurrences are listed by name; `expected` is in result order (start, then id). Regenerate ids/start/end with the projection's rules. `periods` are the agenda page's date choices (web.views.period_range).",
+ "today": "2026-11-01",
+ "slugs": [
+  "concert",
+  "spectacle",
+  "cinema",
+  "exposition",
+  "marche",
+  "brocante",
+  "fete",
+  "sport-balade",
+  "atelier-conference",
+  "loto-jeux",
+  "autre"
+ ],
+ "matrix": {
+  "communes": [
+   "26182",
+   "26220",
+   "26377",
+   "84138"
+  ],
+  "minutes": [
+   [
+    0,
+    10,
+    null,
+    28
+   ],
+   [
+    10,
+    0,
+    12,
+    30
+   ],
+   [
+    9,
+    12,
+    0,
+    20
+   ],
+   [
+    28,
+    30,
+    0,
+    0
+   ]
+  ]
+ },
+ "occurrences": [
+  {
+   "name": "expo",
+   "event_key": "datatourisme:expo",
+   "key": "datatourisme:expo/2026-10-01",
+   "id": "occ_37-VxVS-xkky",
+   "dates": {
+    "start_date": "2026-10-01",
+    "start_time": null,
+    "end_date": "2026-12-31",
+    "end_time": null
+   },
+   "start": "2026-10-01",
+   "end": "2026-12-31",
+   "category": "exposition",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "until4",
+   "event_key": "datatourisme:until4",
+   "key": "datatourisme:until4/2026-11-01",
+   "id": "occ_FRuapZDClkEP",
+   "dates": {
+    "start_date": "2026-11-01",
+    "start_time": null,
+    "end_date": "2026-11-04",
+    "end_time": null
+   },
+   "start": "2026-11-01",
+   "end": "2026-11-04",
+   "category": "exposition",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "night",
+   "event_key": "datatourisme:night",
+   "key": "datatourisme:night/2026-11-04",
+   "id": "occ_YAqLeHZ_ZhOF",
+   "dates": {
+    "start_date": "2026-11-04",
+    "start_time": "21:00",
+    "end_date": "2026-11-05",
+    "end_time": "01:00"
+   },
+   "start": "2026-11-04T21:00:00+01:00",
+   "end": "2026-11-05T01:00:00+01:00",
+   "category": "concert",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26182",
+    "commune_name": "Mirabel-aux-Baronnies",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "midnight",
+   "event_key": "datatourisme:midnight",
+   "key": "datatourisme:midnight/2026-11-04",
+   "id": "occ_NhG3apCAHS8D",
+   "dates": {
+    "start_date": "2026-11-04",
+    "start_time": "21:00",
+    "end_date": "2026-11-05",
+    "end_time": "00:00"
+   },
+   "start": "2026-11-04T21:00:00+01:00",
+   "end": "2026-11-05T00:00:00+01:00",
+   "category": "concert",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "dateonly",
+   "event_key": "datatourisme:dateonly",
+   "key": "datatourisme:dateonly/2026-11-05",
+   "id": "occ_ILFC_PoSPj1F",
+   "dates": {
+    "start_date": "2026-11-05",
+    "start_time": null,
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-11-05",
+   "end": null,
+   "category": "marche",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "late",
+   "event_key": "datatourisme:late",
+   "key": "datatourisme:late/2026-11-05",
+   "id": "occ_4iv1NZawFhQb",
+   "dates": {
+    "start_date": "2026-11-05",
+    "start_time": "23:59",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-11-05T23:59:00+01:00",
+   "end": null,
+   "category": "fete",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "84600",
+    "commune": "84138",
+    "commune_name": "Valréas",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "next",
+   "event_key": "datatourisme:next",
+   "key": "datatourisme:next/2026-11-06",
+   "id": "occ_itxHn65hqKEb",
+   "dates": {
+    "start_date": "2026-11-06",
+    "start_time": "00:00",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-11-06T00:00:00+01:00",
+   "end": null,
+   "category": "marche",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26377",
+    "commune_name": "Vinsobres",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "same1",
+   "event_key": "datatourisme:same1",
+   "key": "datatourisme:same1/2026-11-02",
+   "id": "occ_R2PnJm28rqTO",
+   "dates": {
+    "start_date": "2026-11-02",
+    "start_time": "09:00",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-11-02T09:00:00+01:00",
+   "end": null,
+   "category": "marche",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "same2",
+   "event_key": "datatourisme:same2",
+   "key": "datatourisme:same2/2026-11-02",
+   "id": "occ_kxv6GdVzy5L4",
+   "dates": {
+    "start_date": "2026-11-02",
+    "start_time": "09:00",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-11-02T09:00:00+01:00",
+   "end": null,
+   "category": "marche",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "same3",
+   "event_key": "datatourisme:same3",
+   "key": "datatourisme:same3/2026-11-02",
+   "id": "occ_g7ySqydN6U3U",
+   "dates": {
+    "start_date": "2026-11-02",
+    "start_time": "09:00",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-11-02T09:00:00+01:00",
+   "end": null,
+   "category": "marche",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "allday",
+   "event_key": "datatourisme:allday",
+   "key": "datatourisme:allday/2026-11-02",
+   "id": "occ_1ij5fkKGCfXL",
+   "dates": {
+    "start_date": "2026-11-02",
+    "start_time": null,
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-11-02",
+   "end": null,
+   "category": "brocante",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26182",
+    "commune_name": "Mirabel-aux-Baronnies",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "evening",
+   "event_key": "datatourisme:evening",
+   "key": "datatourisme:evening/2026-11-02",
+   "id": "occ_1tucyv4QapPs",
+   "dates": {
+    "start_date": "2026-11-02",
+    "start_time": "19:00",
+    "end_date": null,
+    "end_time": "01:00"
+   },
+   "start": "2026-11-02T19:00:00+01:00",
+   "end": "2026-11-03T01:00:00+01:00",
+   "category": "concert",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26377",
+    "commune_name": "Vinsobres",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "past",
+   "event_key": "datatourisme:past",
+   "key": "datatourisme:past/2026-10-20",
+   "id": "occ_W3qqXQKkVjsS",
+   "dates": {
+    "start_date": "2026-10-20",
+    "start_time": "10:00",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-10-20T10:00:00+02:00",
+   "end": null,
+   "category": "marche",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "oct31",
+   "event_key": "datatourisme:oct31",
+   "key": "datatourisme:oct31/2026-10-31",
+   "id": "occ_sIowFMAi_o9S",
+   "dates": {
+    "start_date": "2026-10-31",
+    "start_time": "23:00",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-10-31T23:00:00+01:00",
+   "end": null,
+   "category": "spectacle",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "dec1",
+   "event_key": "datatourisme:dec1",
+   "key": "datatourisme:dec1/2026-12-01",
+   "id": "occ_No8yC6I47m4P",
+   "dates": {
+    "start_date": "2026-12-01",
+    "start_time": "23:30",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-12-01T23:30:00+01:00",
+   "end": null,
+   "category": "spectacle",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "dec2",
+   "event_key": "datatourisme:dec2",
+   "key": "datatourisme:dec2/2026-12-02",
+   "id": "occ_AEaEKgl6grVp",
+   "dates": {
+    "start_date": "2026-12-02",
+    "start_time": null,
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-12-02",
+   "end": null,
+   "category": "spectacle",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "dstoct",
+   "event_key": "datatourisme:dstoct",
+   "key": "datatourisme:dstoct/2026-10-25",
+   "id": "occ_ZvZ4nRByru6e",
+   "dates": {
+    "start_date": "2026-10-25",
+    "start_time": "02:30",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2026-10-25T02:30:00+02:00",
+   "end": null,
+   "category": "fete",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  },
+  {
+   "name": "dstmarch",
+   "event_key": "datatourisme:dstmarch",
+   "key": "datatourisme:dstmarch/2027-03-28",
+   "id": "occ_mCw6-ttEC2yb",
+   "dates": {
+    "start_date": "2027-03-28",
+    "start_time": "02:30",
+    "end_date": null,
+    "end_time": null
+   },
+   "start": "2027-03-28T03:00:00+02:00",
+   "end": null,
+   "category": "fete",
+   "location": {
+    "name": null,
+    "street": null,
+    "postal_code": "26110",
+    "commune": "26220",
+    "commune_name": "Nyons",
+    "lat": null,
+    "lon": null
+   }
+  }
+ ],
+ "cases": [
+  {
+   "name": "a day: spanning, overnight, date-only and late",
+   "query": {
+    "from": "2026-11-05",
+    "to": "2026-11-05"
+   },
+   "expected": [
+    "expo",
+    "night",
+    "dateonly",
+    "late"
+   ]
+  },
+  {
+   "name": "ties on start sorted by id",
+   "query": {
+    "from": "2026-11-02",
+    "to": "2026-11-02"
+   },
+   "expected": [
+    "expo",
+    "until4",
+    "allday",
+    "same1",
+    "same3",
+    "same2",
+    "evening"
+   ]
+  },
+  {
+   "name": "radius 0 keeps the origin only",
+   "query": {
+    "commune": "26220",
+    "within": 0,
+    "from": "2026-11-01",
+    "to": "2026-11-30"
+   },
+   "expected": [
+    "expo",
+    "until4",
+    "same1",
+    "same3",
+    "same2",
+    "midnight",
+    "dateonly"
+   ]
+  },
+  {
+   "name": "radius 10 from Nyons",
+   "query": {
+    "commune": "26220",
+    "within": 10,
+    "from": "2026-11-01",
+    "to": "2026-11-30"
+   },
+   "expected": [
+    "expo",
+    "until4",
+    "allday",
+    "same1",
+    "same3",
+    "same2",
+    "midnight",
+    "night",
+    "dateonly"
+   ]
+  },
+  {
+   "name": "radius 30 from Nyons",
+   "query": {
+    "commune": "26220",
+    "within": 30,
+    "from": "2026-11-01",
+    "to": "2026-11-30"
+   },
+   "expected": [
+    "expo",
+    "until4",
+    "allday",
+    "same1",
+    "same3",
+    "same2",
+    "evening",
+    "midnight",
+    "night",
+    "dateonly",
+    "late",
+    "next"
+   ]
+  },
+  {
+   "name": "a commune alone is that commune only",
+   "query": {
+    "commune": "84138",
+    "from": "2026-11-01",
+    "to": "2026-11-30"
+   },
+   "expected": [
+    "late"
+   ]
+  },
+  {
+   "name": "the matrix is read from the origin",
+   "query": {
+    "commune": "26377",
+    "within": 10,
+    "from": "2026-11-01",
+    "to": "2026-11-30"
+   },
+   "expected": [
+    "allday",
+    "evening",
+    "night",
+    "next"
+   ]
+  },
+  {
+   "name": "one category",
+   "query": {
+    "categories": [
+     "concert"
+    ],
+    "from": "2026-11-01",
+    "to": "2026-11-30"
+   },
+   "expected": [
+    "evening",
+    "midnight",
+    "night"
+   ]
+  },
+  {
+   "name": "two categories",
+   "query": {
+    "categories": [
+     "concert",
+     "marche"
+    ],
+    "from": "2026-11-01",
+    "to": "2026-11-30"
+   },
+   "expected": [
+    "same1",
+    "same3",
+    "same2",
+    "evening",
+    "midnight",
+    "night",
+    "dateonly",
+    "next"
+   ]
+  },
+  {
+   "name": "defaults: today to today + 30",
+   "query": {},
+   "expected": [
+    "expo",
+    "until4",
+    "allday",
+    "same1",
+    "same3",
+    "same2",
+    "evening",
+    "midnight",
+    "night",
+    "dateonly",
+    "late",
+    "next",
+    "dec1"
+   ]
+  },
+  {
+   "name": "a past occurrence only when the range includes it",
+   "query": {
+    "from": "2026-10-20",
+    "to": "2026-10-20"
+   },
+   "expected": [
+    "expo",
+    "past"
+   ]
+  },
+  {
+   "name": "ambiguous time on the October change",
+   "query": {
+    "from": "2026-10-25",
+    "to": "2026-10-25"
+   },
+   "expected": [
+    "expo",
+    "dstoct"
+   ]
+  },
+  {
+   "name": "nonexistent time on the March change",
+   "query": {
+    "from": "2027-03-28",
+    "to": "2027-03-28"
+   },
+   "expected": [
+    "dstmarch"
+   ]
+  },
+  {
+   "name": "a span of 92 days is allowed",
+   "query": {
+    "from": "2026-11-01",
+    "to": "2027-02-01"
+   },
+   "expected": [
+    "expo",
+    "until4",
+    "allday",
+    "same1",
+    "same3",
+    "same2",
+    "evening",
+    "midnight",
+    "night",
+    "dateonly",
+    "late",
+    "next",
+    "dec1",
+    "dec2"
+   ]
+  },
+  {
+   "name": "within without commune",
+   "query": {
+    "within": 30
+   },
+   "error": "commune"
+  },
+  {
+   "name": "within over 60",
+   "query": {
+    "commune": "26220",
+    "within": 61
+   },
+   "error": "within"
+  },
+  {
+   "name": "within negative",
+   "query": {
+    "commune": "26220",
+    "within": -1
+   },
+   "error": "within"
+  },
+  {
+   "name": "commune outside the covered area",
+   "query": {
+    "commune": "75056",
+    "within": 10
+   },
+   "error": "covered"
+  },
+  {
+   "name": "to before from",
+   "query": {
+    "from": "2026-11-10",
+    "to": "2026-11-01"
+   },
+   "error": "before"
+  },
+  {
+   "name": "span over 92 days",
+   "query": {
+    "from": "2026-11-01",
+    "to": "2027-03-01"
+   },
+   "error": "92"
+  },
+  {
+   "name": "unknown category",
+   "query": {
+    "categories": [
+     "marche",
+     "inconnue"
+    ]
+   },
+   "error": "category"
+  }
+ ],
+ "periods": [
+  {
+   "period": "aujourdhui",
+   "today": "2026-11-04",
+   "from": "2026-11-04",
+   "to": "2026-11-04"
+  },
+  {
+   "period": "week-end",
+   "today": "2026-11-04",
+   "from": "2026-11-07",
+   "to": "2026-11-08"
+  },
+  {
+   "period": "week-end",
+   "today": "2026-11-07",
+   "from": "2026-11-07",
+   "to": "2026-11-08"
+  },
+  {
+   "period": "week-end",
+   "today": "2026-11-08",
+   "from": "2026-11-08",
+   "to": "2026-11-08"
+  },
+  {
+   "period": "7j",
+   "today": "2026-12-28",
+   "from": "2026-12-28",
+   "to": "2027-01-03"
+  },
+  {
+   "period": "30j",
+   "today": "2026-11-04",
+   "from": "2026-11-04",
+   "to": "2026-12-03"
+  }
+ ]
+}

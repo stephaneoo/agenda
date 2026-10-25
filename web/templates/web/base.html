@@ -5,13 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Agenda autour de Nyons{% endblock %}</title>
 <link rel="stylesheet" href="{% static 'web/site.css' %}">
+<script type="module" src="{% static 'web/app.js' %}"></script>
 {% block head %}{% endblock %}
 </head>
-<body>
+<body data-page="{% block page %}{% endblock %}">
 <header class="site">
   <a class="brand" href="/">Agenda autour de Nyons</a>
   <nav><a href="/a-propos/">À propos</a></nav>
 </header>
+<p id="offline-banner" class="banner" role="status" hidden></p>
 <main>
 {% block content %}{% endblock %}
 </main>

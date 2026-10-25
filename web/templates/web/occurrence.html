@@ -1,4 +1,5 @@
 {% extends "web/base.html" %}
+{% block page %}occurrence{% endblock %}
 {% load web_tags %}
 {% block title %}{{ event.name }} — {{ row.start|date:"j F Y" }}{% endblock %}
 {% block head %}{{ jsonld|ldjson }}{% endblock %}

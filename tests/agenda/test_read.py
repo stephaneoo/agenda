@@ -1,4 +1,6 @@
+import json
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -241,3 +243,48 @@ def test_default_from_is_today_in_paris(monkeypatch: pytest.MonkeyPatch) -> None
     # 23:30 UTC on 31 October is already 00:30 on 1 November in Paris.
     monkeypatch.setattr(dj_timezone, "now", lambda: datetime(2026, 10, 31, 23, 30, tzinfo=timezone.utc))
     assert keys(search_occurrences(None, None, None, None, [], None)) == [nov1]
+
+
+# --- Shared with the offline filter (tests/js/filter.test.js) ------------------------------
+
+FILTER_CASES = json.loads((Path(__file__).parents[1] / "fixtures" / "filter-cases.json").read_text(encoding="utf-8"))
+
+
+def _load_filter_occurrences() -> dict[str, str]:
+    """Import the shared occurrences; check that the projection gives them the fixture's id,
+    start and end (what the API serves and the JS filter reads). Returns id -> name."""
+    names = {}
+    for o in FILTER_CASES["occurrences"]:
+        import_event(o["event_key"], dates=[o["dates"]], category=o["category"], loc=o["location"], name=o["name"])
+        row = Occurrence.objects.get(key=o["key"])
+        assert (row.id, row.start, row.end) == (o["id"], o["start"], o["end"]), o["name"]
+        names[row.id] = o["name"]
+    return names
+
+
+def test_shared_filter_cases_matrix_is_the_served_one() -> None:
+    from geo.services import matrix_payload
+
+    payload = matrix_payload()
+    assert {"communes": payload["communes"], "minutes": payload["minutes"]} == FILTER_CASES["matrix"]
+    from agenda.categories import SLUGS
+    assert FILTER_CASES["slugs"] == list(SLUGS)
+
+
+@pytest.mark.parametrize("case", FILTER_CASES["cases"], ids=[c["name"] for c in FILTER_CASES["cases"]])
+def test_shared_filter_cases(case: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    names = _load_filter_occurrences()
+    monkeypatch.setattr(read, "today", lambda: date.fromisoformat(FILTER_CASES["today"]))
+    q = case["query"]
+    args = {
+        "commune": q.get("commune"), "within": q.get("within"),
+        "date_from": date.fromisoformat(q["from"]) if "from" in q else None,
+        "date_to": date.fromisoformat(q["to"]) if "to" in q else None,
+        "categories": q.get("categories", []), "cursor": None, "limit": 200,
+    }
+    if "error" in case:
+        with pytest.raises(InvalidQuery) as e:
+            search_occurrences(**args)
+        assert case["error"] in e.value.detail
+    else:
+        assert [names[o.id] for o in search_occurrences(**args).items] == case["expected"]
