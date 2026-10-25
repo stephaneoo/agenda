@@ -32,6 +32,7 @@ from agenda.models import Event, Occurrence
 from agenda.projection import rebuild_all
 from claims.models import Claim, Source
 from claims.resolve import resolve
+from claims.services import MODERATION
 
 STATUS_LABELS = {"postponed": "Reporté", "cancelled": "Annulé", "scheduled": "Prévu (valeur de la source)"}
 JSON_FIELDS = ("location", "organizer", "offers")
@@ -287,11 +288,32 @@ class OccurrenceAdmin(ModeratedAdmin):
         return f"Déplacée au {data['new_date']:%d/%m/%Y}", moved or obj
 
 
+class SourceForm(forms.ModelForm):
+    class Meta:
+        model = Source
+        fields = ("label", "priority", "licence", "external")
+
+    def clean_priority(self) -> int:
+        """Moderation must outrank every source, or a sync could undo a moderator's work."""
+        priority = self.cleaned_data["priority"]
+        top = Source.objects.filter(name=MODERATION).values_list("priority", flat=True).first()
+        if self.instance.name != MODERATION and top is not None and priority >= top:
+            raise forms.ValidationError(f"La priorité doit rester inférieure à celle de la source « moderation » ({top}).")
+        return priority
+
+
 @admin.register(Source)
 class SourceAdmin(admin.ModelAdmin):
+    form = SourceForm
     list_display = ("name", "label", "priority", "licence", "external", "last_outcome", "last_success_at")
     fields = ("name", "label", "priority", "licence", "external", "last_run_at", "last_outcome", "last_success_at")
     readonly_fields = ("name", "last_run_at", "last_outcome", "last_success_at")
+
+    def get_readonly_fields(self, request: HttpRequest, obj: Any = None) -> tuple:
+        # Moderation stays the highest priority, and never an external (cited) source.
+        if obj is not None and obj.name == MODERATION:
+            return (*self.readonly_fields, "priority", "external")
+        return self.readonly_fields
 
     def has_add_permission(self, request: HttpRequest, obj: Any = None) -> bool:
         return False

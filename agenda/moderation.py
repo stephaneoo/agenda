@@ -12,7 +12,9 @@ value write_claims refuses); the admin shows it on the form.
 - edit_field / revert_field: a moderation claim on one event field, or its removal.
 - set_status: postponed or cancelled on one occurrence; scheduled removes the override.
 - move: the new date gets dates, listed, status "rescheduled" and previous_start; the old
-  occurrence gets moved_to the new key. The projection follows chains of moves.
+  occurrence gets moved_to the new key and loses its own moderation dates, listed, status
+  and previous_start, so a target an earlier move created leaves no ghost. An occurrence
+  already moved can't be moved again: move its final target. One transaction.
 
 `user` is who did it, for the log (the admin also records a LogEntry).
 """
@@ -22,6 +24,8 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, time
 from typing import Any
+
+from django.db import transaction
 
 from agenda.fields import MAX_TEXT
 from agenda.models import Event, Occurrence
@@ -35,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 EDITABLE_FIELDS = ("name", "description", "category", "location", "organizer", "offers")
 SETTABLE_STATUSES = ("postponed", "cancelled", "scheduled")
+# What a move removes from the date it leaves (moderation claims only).
+ABANDONED_FIELDS = ("dates", "listed", "status", "previous_start")
 
 
 def _target(target: Event | Occurrence) -> tuple[str, str, str]:
@@ -72,6 +78,8 @@ def restore(target: Event | Occurrence, user: Any, reason: str) -> None:
     to the log and the admin history (the claim it removes is archived in ClaimHistory)."""
     target_type, key, _ = _target(target)
     reason = _reason(reason)
+    if not Claim.objects.filter(target_type=target_type, target_key=key, field="visibility", source_id=MODERATION).exists():
+        raise ValueError("rien à rétablir : aucun masquage par la modération sur cet objet")
     moderation_delete(target_type, key, "visibility")
     _log("restore", key, user, reason)
 
@@ -120,6 +128,10 @@ def move(occurrence: Occurrence, new_date: date, new_time: time | None, user: An
     if not isinstance(new_date, date) or isinstance(new_date, datetime):
         raise ValueError("new_date must be a date")
     _, old_key, event_key = _target(occurrence)
+    if occurrence.moved_to_id or _moderation_claims(old_key, ("moved_to",)):
+        final = Occurrence.objects.filter(id=occurrence.moved_to_id).first() if occurrence.moved_to_id else None
+        where = f" au {final.local_date:%d/%m/%Y}" if final else ""
+        raise ValueError(f"cette occurrence est déjà déplacée{where} : déplacez plutôt sa cible")
     new_key = occurrence_key(event_key, new_date)
     if new_key == old_key:
         raise ValueError("the occurrence is already on that date")
@@ -136,15 +148,27 @@ def move(occurrence: Occurrence, new_date: date, new_time: time | None, user: An
         value = dates.to_claim()
     except (ValueError, OverflowError) as e:
         raise ValueError(f"bad date: {e}") from None
-    # Moving back to a date that was itself moved away: that move no longer holds (else
-    # the two would form a cycle, which the projection ignores).
-    if Claim.objects.filter(target_type="occurrence", target_key=new_key, field="moved_to", source_id=MODERATION).exists():
-        moderation_delete("occurrence", new_key, "moved_to")
-    moderation_write(event_key, [
-        NewClaim("occurrence", new_key, "dates", value, MODERATION),
-        NewClaim("occurrence", new_key, "listed", True, MODERATION),
-        NewClaim("occurrence", new_key, "status", "rescheduled", MODERATION),
-        NewClaim("occurrence", new_key, "previous_start", previous, MODERATION),
-        NewClaim("occurrence", old_key, "moved_to", new_key, MODERATION),
-    ])
+    # All of it in one transaction (one event's claims only).
+    with transaction.atomic():
+        # Moving back to a date that was itself moved away: that move no longer holds (else
+        # the two would form a cycle, which the projection ignores).
+        for field in _moderation_claims(new_key, ("moved_to",)):
+            moderation_delete("occurrence", new_key, field)
+        # The date left behind keeps only its redirect: a target an earlier move created
+        # (dates, listed, status, previous_start from moderation) would otherwise stay listed.
+        for field in _moderation_claims(old_key, ABANDONED_FIELDS):
+            moderation_delete("occurrence", old_key, field)
+        moderation_write(event_key, [
+            NewClaim("occurrence", new_key, "dates", value, MODERATION),
+            NewClaim("occurrence", new_key, "listed", True, MODERATION),
+            NewClaim("occurrence", new_key, "status", "rescheduled", MODERATION),
+            NewClaim("occurrence", new_key, "previous_start", previous, MODERATION),
+            NewClaim("occurrence", old_key, "moved_to", new_key, MODERATION),
+        ])
     _log("move", old_key, user, new_key)
+
+
+def _moderation_claims(key: str, fields: tuple[str, ...]) -> list[str]:
+    return list(Claim.objects.filter(
+        target_type="occurrence", target_key=key, field__in=fields, source_id=MODERATION,
+    ).values_list("field", flat=True))
