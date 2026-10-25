@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Run commands on the Scaleway dev VM, against an up-to-date copy of this working tree.
+#
+#   tools/dev run '<command>'   sync the tree to the VM, then run <command> from the repo root
+#   tools/dev run-scw '<cmd>'   same, with the Scaleway credentials from .env exported for that command only
+#   tools/dev pull <path>...    copy files generated on the VM (e.g. uv.lock) back to the laptop
+#   tools/dev ssh               interactive shell on the VM
+#
+# Secrets (.env, .secrets/) are never copied to the VM.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+host="root@$(cat "$root/.secrets/dev-ip")"
+remote_dir=/srv/agenda
+ssh_opts=(-i "$root/.secrets/agenda_ed25519" -o "UserKnownHostsFile=$root/.secrets/known_hosts" -o BatchMode=yes -o ConnectTimeout=15)
+nix_env='. /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+
+sync_tree() {
+  rsync -az --delete \
+    --exclude .env --exclude .secrets/ --exclude .claude/ \
+    --exclude result --exclude 'result-*' --exclude .direnv/ --exclude __pycache__/ \
+    -e "ssh ${ssh_opts[*]}" "$root/" "$host:$remote_dir/"
+}
+
+case "${1:-}" in
+  run)
+    shift
+    sync_tree
+    ssh "${ssh_opts[@]}" "$host" "$nix_env && cd $remote_dir && $*"
+    ;;
+  run-scw)
+    # Like run, with the SCW_* variables from .env exported for this one command.
+    # They travel over stdin, so they appear in no remote file and no process list.
+    shift
+    sync_tree
+    { grep -E '^SCW_[A-Z_]+=' "$root/.env" | sed 's/^/export /'
+      printf '%s\ncd %s && %s\n' "$nix_env" "$remote_dir" "$*"
+    } | ssh "${ssh_opts[@]}" "$host" 'bash -s'
+    ;;
+  pull)
+    shift
+    for path in "$@"; do
+      rsync -az -e "ssh ${ssh_opts[*]}" "$host:$remote_dir/$path" "$root/$path"
+    done
+    ;;
+  ssh)
+    exec ssh "${ssh_opts[@]}" -t "$host" "cd $remote_dir 2>/dev/null; exec bash -l"
+    ;;
+  *)
+    sed -n '2,10p' "$0" >&2
+    exit 2
+    ;;
+esac
