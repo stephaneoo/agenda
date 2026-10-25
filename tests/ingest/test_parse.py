@@ -104,3 +104,60 @@ def test_row_to_claims_truncates_and_writes_valid_claims() -> None:
 def test_row_without_id_name_or_dates_is_refused(bad: dict) -> None:
     with pytest.raises(parse.RowError):
         parse.row_to_claims(row(1, **bad), commune="26220", commune_name="Nyons", seen_at=SEEN)
+
+
+# --- Weekday in the name (batch C review, M2a) -------------------------------------------------
+
+@pytest.mark.parametrize("name, weekday", [
+    ("Mardi : Marché hebdomadaire Grignan", 1),
+    ("Marché nyonsais du jeudi", 3),
+    ("Marché de Valréas - Tous les mardi", 1),
+    ("Marché provençal tous les samedis", 5),
+    ("Marché bio le VENDREDI", 4),
+])
+def test_long_period_with_one_weekday_in_the_name_expands_per_weekday(name: str, weekday: int) -> None:
+    occs = expand(parse.periods("2026-01-01<->2026-12-31", name))
+    assert 52 <= len(occs) <= 53
+    assert {o.start_date.weekday() for o in occs} == {weekday}
+    assert all(o.end_date is None and o.start_time is None for o in occs)
+
+
+@pytest.mark.parametrize("name, periods", [
+    ("Marché du mardi et du vendredi", "2026-01-01<->2026-12-31"),  # two weekdays
+    ("Marché du jeudi", "2026-11-01<->2026-11-25"),  # 25 days: a short period stays one
+    ("Exposition au château", "2026-01-01<->2026-12-31"),  # no weekday
+    ("Les mardis de l'été et le jeudi", "2026-06-01<->2026-09-30"),  # two again
+    ("Fête de la Saint-Samedi", "2026-01-01<->2026-12-31"),  # a weekday word, not a pattern
+])
+def test_no_weekday_expansion(name: str, periods: str) -> None:
+    occs = expand(parse.periods(periods, name))
+    assert len(occs) == 1
+
+
+def test_row_to_claims_expands_a_weekly_market() -> None:
+    r = row(5, "2026-01-01<->2026-12-31", name="Marché nyonsais du jeudi")
+    key, claims = parse.row_to_claims(r, commune="26220", commune_name="Nyons", seen_at=SEEN)
+    dates = [c for c in claims if c.field == "dates"]
+    assert len(dates) == 53  # 2026 has 53 Thursdays
+    assert dates[0].target_key == f"{key}/2026-01-01" and dates[-1].target_key == f"{key}/2026-12-31"
+
+
+# --- Category names (batch C review, minor 6) ----------------------------------------------------
+
+@pytest.mark.parametrize("types, name, slug", [
+    (["Product", "Visit", "CulturalEvent"], "Visite guidée du centre ancien de Dieulefit", "sport-balade"),
+    (["Visit", "Product"], "Les Ateliers Créatifs de Myriam", "atelier-conference"),
+    (["Visit", "CulturalEvent"], "Conférence sur la truffe", "atelier-conference"),
+    (["Visit"], "Anniversaire de la commanderie", "fete"),
+    (["Visit"], "Visite théâtralisée du château", "spectacle"),
+    (["CulturalEvent"], "STAGE DE MISE EN SCÈNE", "atelier-conference"),
+    (["CulturalEvent"], "Cours de poterie", "atelier-conference"),
+    (["CulturalEvent"], 'Spectacle "Détective Lovecraft"', "spectacle"),
+    (["CulturalEvent"], "Théâtre : Petits crimes conjugaux", "spectacle"),
+    (["CulturalEvent"], "Une comédie de Molière", "spectacle"),
+    (["CulturalEvent"], "Petits crimes conjugaux", "autre"),
+    (["CulturalEvent"], "Tournoi de tarot", "autre"),  # tarot is not a loto
+    (["Concert", "CulturalEvent"], "Stage et concert", "concert"),  # a specific type wins over the name
+])
+def test_category_names(types: list[str], name: str, slug: str) -> None:
+    assert mapping.category_for(types, name) == slug

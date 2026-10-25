@@ -6,7 +6,9 @@ A row carries several; the first rule below that one of them matches wins, so th
 specific kinds come first. Types that say nothing about the kind of event (GENERIC) are
 ignored, and an event with no mapped type is "autre". The table holds the types seen in
 the area's rows (October 2026); a new type falls to "autre" until it is added here.
-Lotos carry no type of their own in the export, so the name decides those (LOTO).
+Lotos carry no type of their own in the export, so the name decides those (LOTO); the name
+also decides when the types are only generic, or when a Visit is really a workshop, a talk
+or a show (NAME_RULES).
 """
 
 from __future__ import annotations
@@ -41,19 +43,40 @@ for _slug, _types in RULES:
 # On every event, or too broad to tell a kind of event.
 GENERIC = frozenset({"PointOfInterest", "EntertainmentAndEvent", "Event", "CulturalEvent", "Product"})
 
-LOTO = re.compile(r"\b(loto|lotos|belote|tarot|jeux? de societe|soiree jeux|escape game)\b")
+LOTO = re.compile(r"\b(loto|lotos|belote|jeux? de societe|soiree jeux|escape game)\b")
+# Name keywords, for events whose types say nothing specific (only GENERIC ones), and for a
+# Visit that is really something else. In this order.
+NAME_RULES: list[tuple[str, re.Pattern[str]]] = [
+    ("atelier-conference", re.compile(r"\b(ateliers?|stages?|cours|conferences?)\b")),
+    ("spectacle", re.compile(r"\b(theatre|theatrale?s?|theatralisee?s?|comedie|piece|spectacles?)\b")),
+    ("fete", re.compile(r"\banniversaires?\b")),
+]
 
 
-def _plain(text: str) -> str:
+def plain(text: str) -> str:
+    """Lower case, accents off: "Théâtre" is "theatre"."""
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
 
 
+def _by_name(name: str) -> str | None:
+    text = plain(name)
+    for slug, pattern in NAME_RULES:
+        if pattern.search(text):
+            return slug
+    return None
+
+
 def category_for(types: list[str], name: str = "") -> str:
-    """The category slug of an event with these DATAtourisme types (local names)."""
-    if name and LOTO.search(_plain(name)):
+    """The category slug of an event with these DATAtourisme types (local names), and name."""
+    if name and LOTO.search(plain(name)):
         return "loto-jeux"
     present = set(types)
     for slug, rule in RULES:
-        if present & rule:
-            return slug
-    return DEFAULT
+        matched = present & rule
+        if not matched:
+            continue
+        if matched == {"Visit"}:
+            # A "visit" that is a workshop, a talk, a show: the name says so.
+            return (name and _by_name(name)) or slug
+        return slug
+    return (name and _by_name(name)) or DEFAULT

@@ -6,7 +6,8 @@ Categories_de_POI, Latitude, Longitude, Adresse_postale, Code_postal_et_commune
 organizer, prices, status or images; contacts are kept in the raw payload only.
 
 Periodes_regroupees is "<start>[<-><end>]" periods joined by "|", dates only (YYYY-MM-DD):
-the export carries no times and no weekdays. A recurrence comes as a list of single days.
+the export carries no times and no weekdays. A recurrence comes as a list of single days, or
+as one long range whose name gives the weekday ("Marché du jeudi"): see weekday_in_name.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from agenda.periods import Period, expand
 from claims.keys import occurrence_key, year_ok
 from claims.services import NewClaim
 from geo.services import valid_point
-from ingest.datatourisme.mapping import category_for
+from ingest.datatourisme.mapping import category_for, plain
 
 SOURCE = "datatourisme"
 KEY_PREFIX = "datatourisme:"
@@ -113,12 +114,39 @@ def updated_at(row: dict) -> date | None:
     return d if d and year_ok(d) else None
 
 
-def periods(raw: Any) -> list[Period]:
+DAYS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+# A range longer than this, whose name gives one weekday, is that weekday every week.
+WEEKLY_MIN_DAYS = 30
+
+
+def weekday_in_name(name: str | None) -> int | None:
+    """The weekday (0 = Monday) a name gives unambiguously, or None.
+
+    One weekday only must appear in the name, in one of these forms (case and accents
+    ignored): "Mardi : …", "… du jeudi", "… tous les mardi(s)", "… le vendredi". The export
+    writes a weekly market as one range over the year; its name is where the weekday is.
+    Descriptions are never read: too ambiguous.
+    """
+    if not name:
+        return None
+    text = plain(name)
+    mentioned = {i for i, d in enumerate(DAYS) if re.search(rf"\b{d}s?\b", text)}
+    if len(mentioned) != 1:
+        return None
+    i = mentioned.pop()
+    d = DAYS[i]
+    forms = (rf"^\s*{d}\s*:", rf"\bdu {d}\b", rf"\btous les {d}s?\b", rf"\ble {d}\b")
+    return i if any(re.search(f, text) for f in forms) else None
+
+
+def periods(raw: Any, name: str | None = None) -> list[Period]:
     """The periods of Periodes_regroupees. Malformed pieces are dropped.
 
     An end before its start in the same year is a season over the new year that the export
     wrote with the start's year: it ends the next year. Multi-day ranges that overlap or
-    touch are merged, so a season split in two isn't two spanning occurrences.
+    touch are merged, so a season split in two isn't two spanning occurrences. A merged
+    range over WEEKLY_MIN_DAYS whose `name` gives one weekday (weekday_in_name) becomes
+    that weekday each week.
     """
     if not isinstance(raw, str):
         return []
@@ -144,7 +172,12 @@ def periods(raw: Any) -> list[Period]:
             merged[-1][1] = max(merged[-1][1], end)
         else:
             merged.append([start, end])
-    return [Period(s, e) for s, e in singles] + [Period(s, e) for s, e in merged]
+    weekday = weekday_in_name(name)
+    out = [Period(s, e) for s, e in singles]
+    for s, e in merged:
+        weekly = weekday is not None and (e - s).days > WEEKLY_MIN_DAYS
+        out.append(Period(s, e, weekdays=frozenset({weekday}) if weekly else None))
+    return out
 
 
 # --- Claims --------------------------------------------------------------------------------
@@ -183,7 +216,7 @@ def row_to_claims(
     name = truncate(clean(row.get("Nom_du_POI"), one_line=True), MAX_NAME)
     if not name:
         raise RowError(f"{key!r}: no name")
-    occurrences = expand(periods(row.get("Periodes_regroupees")))
+    occurrences = expand(periods(row.get("Periodes_regroupees"), name))
     if not occurrences:
         raise RowError(f"{key!r}: no usable dates in Periodes_regroupees")
     p = place(row)

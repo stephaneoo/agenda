@@ -58,7 +58,7 @@ LOCK_KEY = 7_204_311_626
 BBOX_MARGIN = 0.01
 # Part of the payload hash: bump it when parse or mapping change what a row becomes, so the
 # next sync rewrites every record instead of keeping them as unchanged.
-PARSER_VERSION = 1
+PARSER_VERSION = 2  # 2: weekday from the name, category name rules
 OUTCOME = {"clean": "ok", "partial": "partial", "failed": "failed"}
 
 
