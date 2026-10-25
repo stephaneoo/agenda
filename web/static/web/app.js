@@ -6,7 +6,7 @@
 // renders from the copy, and an occurrence page that wasn't cached renders from it too.
 
 import { InvalidQuery, addDays, filterOccurrences, groupForList, parisToday, periodRange } from "./filter.js";
-import { loadSnapshot, saveSnapshot } from "./store.js";
+import { bannerText, loadSnapshot, saveSnapshot } from "./store.js";
 
 const API = "/api/v1";
 const SPAN_DAYS = 30;
@@ -20,15 +20,18 @@ const DAY_HEADING = fmt({ weekday: "long", day: "numeric", month: "long" });
 const SHORT_DAY = fmt({ day: "numeric", month: "short" });
 const LONG_DATE = fmt({ weekday: "long", day: "numeric", month: "long", year: "numeric" });
 const HOUR = fmt({ hour: "2-digit", minute: "2-digit" });
-const SAVED = fmt({ day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" });
+const DAY_ONLY = fmt({ day: "numeric", month: "long", year: "numeric" });
 
 // A local date as a Date at noon UTC, so formatting it in Paris gives the same day.
 const asDay = (s) => new Date(`${s}T12:00:00Z`);
 const hasTime = (s) => s.length > 10;
 
+// The server answered, with an error: not the same as being offline.
+class HttpError extends Error {}
+
 async function getJson(url) {
   const response = await fetch(url, { headers: { Accept: "application/json" } });
-  if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+  if (!response.ok) throw new HttpError(`${url}: HTTP ${response.status}`);
   return response.json();
 }
 
@@ -42,11 +45,12 @@ async function download() {
     items.push(...page.items);
     url = page.next ? `${base}&cursor=${encodeURIComponent(page.next)}` : null;
   }
+  const complete = url === null; // else the cap stopped it: say the copy is partial
   const status = await getJson(`${API}/status`).catch(() => null);
   const syncedAt = status ? status.last_sync : null;
   const now = new Date();
-  await saveSnapshot(items, syncedAt, { now });
-  return { occurrences: items, syncedAt, savedAt: now.toISOString() };
+  await saveSnapshot(items, syncedAt, { now, complete });
+  return { occurrences: items, syncedAt, savedAt: now.toISOString(), complete };
 }
 
 function el(tag, attrs = {}, ...children) {
@@ -61,12 +65,10 @@ function el(tag, attrs = {}, ...children) {
 
 const pathOf = (url) => new URL(url, location.origin).pathname;
 
-function showBanner(snapshot) {
+function showBanner(snapshot, reason) {
   const banner = document.getElementById("offline-banner");
   if (!banner) return;
-  banner.textContent = snapshot
-    ? `Hors ligne · Données du ${SAVED.format(new Date(snapshot.savedAt))}`
-    : "Hors ligne · Aucune copie enregistrée sur cet appareil";
+  banner.textContent = bannerText(snapshot, reason);
   banner.hidden = false;
 }
 
@@ -183,7 +185,7 @@ function renderOccurrence(snapshot, categories) {
       el("dt", { text: "Catégorie" }), el("dd", { text: label })),
     o.description ? el("div", { class: "description" }, ...o.description.split(/\n+/).map((p) => el("p", { text: p }))) : null,
     el("p", { class: "attribution", text: o.sources.map((s) =>
-      `Source : ${s.name} (${s.licence}), mise à jour le ${SAVED.format(new Date(s.updated_at)).replace(/ à .*$/, "")}.`).join(" ") })));
+      `Source : ${s.name} (${s.licence}), mise à jour le ${DAY_ONLY.format(new Date(s.updated_at))}.`).join(" ") })));
 }
 
 // --- Start ---------------------------------------------------------------------------------------
@@ -195,10 +197,10 @@ async function main() {
   let offline = false;
   try {
     snapshot = await download();
-  } catch {
+  } catch (e) {
     offline = true;
     snapshot = await loadSnapshot();
-    showBanner(snapshot);
+    showBanner(snapshot, e instanceof HttpError ? "unavailable" : "offline");
   }
   let categories = [];
   let matrix = null;

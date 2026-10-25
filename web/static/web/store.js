@@ -1,6 +1,7 @@
 // The offline copy of the agenda, in IndexedDB: the covered area's published occurrences for
 // the next 30 days, as GET /api/v1/occurrences serves them, with when the data was last synced
-// upstream (syncedAt, from /api/v1/status) and when this copy was saved (savedAt).
+// upstream (syncedAt, from /api/v1/status), when this copy was saved (savedAt), and whether
+// it is complete.
 //
 // Without IndexedDB (private browsing, blocked storage) nothing throws: saving answers false
 // and loading null, and the page stays as the server rendered it.
@@ -48,9 +49,10 @@ async function withDb(factory, fn) {
 }
 
 // Replace the copy. Resolves true when saved.
-export async function saveSnapshot(occs, syncedAt, { factory = defaultFactory(), now = new Date() } = {}) {
+// `complete`: false when the download stopped at its cap (the copy is partial).
+export async function saveSnapshot(occs, syncedAt, { factory = defaultFactory(), now = new Date(), complete = true } = {}) {
   if (!factory) return false;
-  const value = { occurrences: occs, syncedAt: syncedAt ?? null, savedAt: now.toISOString() };
+  const value = { occurrences: occs, syncedAt: syncedAt ?? null, savedAt: now.toISOString(), complete };
   try {
     await withDb(factory, (db) => run(db, "readwrite", (store) => store.put(value, KEY)));
     return true;
@@ -68,4 +70,18 @@ export async function loadSnapshot({ factory = defaultFactory() } = {}) {
   } catch {
     return null;
   }
+}
+
+const SAVED = new Intl.DateTimeFormat("fr-FR", {
+  timeZone: "Europe/Paris", day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit",
+});
+
+// The banner shown when the page runs on the copy: "offline" (no network) or "unavailable"
+// (the server answered with an error). Both dates, so stale data never looks current.
+export function bannerText(snapshot, reason, format = (s) => SAVED.format(new Date(s))) {
+  const prefix = reason === "unavailable" ? "Données momentanément indisponibles" : "Hors ligne";
+  if (!snapshot) return `${prefix} · aucune copie enregistrée sur cet appareil`;
+  const synced = snapshot.syncedAt ? `Données du ${format(snapshot.syncedAt)}` : "date de synchronisation inconnue";
+  const partial = snapshot.complete === false ? " · copie partielle" : "";
+  return `${prefix} · ${synced} · copie du ${format(snapshot.savedAt)}${partial}`;
 }

@@ -44,7 +44,10 @@ in
 
   # The offline filter and store (web/static/web), on node's test runner.
   js = withSource "agenda-js" ''
-    FAKE_INDEXEDDB=${fakeIndexeddb} ${nodejs}/bin/node --test 'tests/js/*.test.js'
+    export FAKE_INDEXEDDB=${fakeIndexeddb}
+    ${nodejs}/bin/node --test 'tests/js/*.test.js'
+    # Paris time must not depend on the machine's zone.
+    TZ=America/Los_Angeles ${nodejs}/bin/node --test 'tests/js/*.test.js'
   '';
 
   openapi = withSource "agenda-openapi" ''

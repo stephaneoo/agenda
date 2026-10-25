@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { loadSnapshot, saveSnapshot } from "../../web/static/web/store.js";
+import { bannerText, loadSnapshot, saveSnapshot } from "../../web/static/web/store.js";
 
 const dir = process.env.FAKE_INDEXEDDB;
 if (!dir) throw new Error("FAKE_INDEXEDDB is not set: run the tests in the dev shell");
@@ -42,4 +42,22 @@ test("a new snapshot replaces the previous one", async () => {
 test("without IndexedDB (private browsing, old browser) nothing throws", async () => {
   assert.equal(await loadSnapshot({ factory: null }), null);
   assert.equal(await saveSnapshot(occs, null, { factory: null }), false);
+});
+
+test("a capped download is saved as partial", async () => {
+  const factory = new IDBFactory();
+  await saveSnapshot(occs, null, { factory, complete: false });
+  assert.equal((await loadSnapshot({ factory })).complete, false);
+  await saveSnapshot(occs, null, { factory });
+  assert.equal((await loadSnapshot({ factory })).complete, true);
+});
+
+test("the banner gives the server's last sync and when the copy was saved", () => {
+  const fmt = (s) => `<${s}>`;
+  const snap = { occurrences: occs, syncedAt: "2026-10-26T06:02:11+01:00", savedAt: "2026-10-26T07:15:00.000Z", complete: true };
+  assert.equal(bannerText(snap, "offline", fmt),
+    "Hors ligne · Données du <2026-10-26T06:02:11+01:00> · copie du <2026-10-26T07:15:00.000Z>");
+  assert.equal(bannerText({ ...snap, complete: false, syncedAt: null }, "unavailable", fmt),
+    "Données momentanément indisponibles · date de synchronisation inconnue · copie du <2026-10-26T07:15:00.000Z> · copie partielle");
+  assert.equal(bannerText(null, "offline", fmt), "Hors ligne · aucune copie enregistrée sur cet appareil");
 });

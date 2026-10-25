@@ -4,7 +4,8 @@
 // - Precaches the app shell ("/"), the CSS and JS, and the reference endpoints.
 // - Static files: from the cache (it is replaced whenever VERSION changes).
 // - Reference endpoints: the network first, the cache when offline.
-// - Pages: the network first; "/" refreshes the shell, visited occurrence pages are kept.
+// - Pages: the network first; any "/" visit refreshes the shell, visited occurrence pages
+//   are kept, and dropped when the server answers 404 or 410.
 //   Offline, a page comes from the cache, else the shell, which renders from IndexedDB.
 // - /api/v1/occurrences is never cached here: app.js keeps its copy in IndexedDB.
 
@@ -47,12 +48,17 @@ async function page(event, url) {
   try {
     const response = await fetch(request);
     if (response.ok && response.type === "basic") {
-      if (url.pathname === SHELL && !url.search) {
-        event.waitUntil(caches.open(STATIC).then((c) => c.put(SHELL, response.clone())));
+      if (url.pathname === SHELL) {
+        // Any agenda visit refreshes the shell (and its footer's sync date).
+        const copy = response.clone();
+        event.waitUntil(caches.open(STATIC).then((c) => c.put(SHELL, copy)));
       } else if (url.pathname.startsWith("/evenements/")) {
         const copy = response.clone();
         event.waitUntil(caches.open(PAGES).then((c) => c.put(url.pathname, copy).then(() => trim(c))));
       }
+    } else if ((response.status === 404 || response.status === 410) && url.pathname.startsWith("/evenements/")) {
+      // Gone or withdrawn: never show the old copy offline.
+      event.waitUntil(caches.open(PAGES).then((c) => c.delete(url.pathname)));
     }
     return response;
   } catch {
