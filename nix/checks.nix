@@ -43,4 +43,14 @@ in
   openapi = withSource "agenda-openapi" ''
     python -m tools.check_openapi
   '';
+
+  # Django's deployment checklist on the production settings. The key and host are dummies
+  # that exist only in this check; the settings refuse AGENDA_DEV in production.
+  deploy-settings = withSource "agenda-deploy-settings" ''
+    env -u AGENDA_DEV AGENDA_ENV=production \
+      DJANGO_SECRET_KEY=check-only-not-a-real-key-6f1c9b2e8d4a7f3c5e0b9a1d2c8e7f4a \
+      DJANGO_ALLOWED_HOSTS=agenda.example.org \
+      python manage.py check --deploy --fail-level WARNING
+  '';
+
 }
