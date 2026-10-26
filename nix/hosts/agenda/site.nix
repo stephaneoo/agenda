@@ -17,6 +17,5 @@ rec {
   # used for nothing else; the dev VM's key is a different one); the colleague's goes here too.
   rootKeys = [
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGAlTnOewh7fbQt51IqIhiXfr89EiN75wssOCMWFiGPP agenda-prod-root"
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIERzQeRCQAQBnzsYqE7y+KZANE/j8x51s2SfAl3TmHcQ agenda-claude"
   ];
 }
