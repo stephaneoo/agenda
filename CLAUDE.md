@@ -70,7 +70,10 @@ Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed
 On the Mac laptop without Nix, run commands on the dev VM: `tools/dev run '<command>'`, and bring
 generated files back with `tools/dev pull <path>`. The sync sends what `git ls-files` lists
 (tracked, plus untracked but not ignored) and deletes on the VM what is gone locally. Flakes only see files tracked by git, so
-`git add` new files before running Nix.
+`git add` new files before running Nix. The dev VM (`agenda-dev`) is the permanent dev and
+deploy machine, not a temporary one. `tools/dev run-agent '<cmd>'` forwards a throwaway agent
+holding only prod's root key (`.secrets/agenda_prod_ed25519`) for commands that SSH on to prod
+(the deploy); the VM's own key (`.secrets/agenda_ed25519`) is not accepted by prod.
 
 ## Operations
 
@@ -85,8 +88,10 @@ command, and explain to the colleague in plain French what happened.
 - `nix run .#deploy`: the guarded deploy (`tools/deploy.py`): clean tree and `main` =
   `origin/main`, every check, the system built on the host, deploy-rs with magic rollback,
   `/healthz` (`"debug": false`) or a switch back, then the `deploy-<UTC>` tag pushed. One at
-  a time (an flock on the host). From a Mac the e2e runs on the host, bounded
-  (`deploy.remote_e2e_command`); `--remote-e2e` forces that path from Linux.
+  a time, never during a restore (both flocks on the host, `deploy.HOST_LOCKS` =
+  `restore.HOST_LOCKS`, taken before the e2e). From a Mac the e2e runs on the host: root
+  builds it (the nix-daemon serves root only), an ephemeral user runs it in its own network
+  namespace, bounded (`deploy.remote_e2e_command`); `--remote-e2e` forces that path from Linux.
 - `nix run .#restore -- [--target-time T | --set L] [--test-only]`: `agenda-restore` on the
   host (`tools/restore.py`); always `--test-only` first.
 - `nix run .#admin-tunnel`: the admin on `http://localhost:8000/admin/` (never public).

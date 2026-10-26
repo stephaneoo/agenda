@@ -6,7 +6,7 @@
 #   nix run .#restore -- [args]      tools/restore.py on the host (Task 15)
 #   nix run .#deploy                 tools/deploy.py (Task 16)
 # SSH: root@<address>, the host key pinned by nix/hosts/agenda/known_hosts. The key is
-# $AGENDA_SSH_KEY, else .secrets/agenda_ed25519 in the repo if present, else ssh's default.
+# $AGENDA_SSH_KEY, else .secrets/agenda_prod_ed25519 in the repo if present, else ssh's default.
 {
   lib,
   pkgs,
@@ -19,8 +19,8 @@ let
     ssh_opts=(-o "UserKnownHostsFile=${knownHosts}" -o StrictHostKeyChecking=yes -o ConnectTimeout=30)
     if [ -n "''${AGENDA_SSH_KEY:-}" ]; then
       ssh_opts+=(-i "$AGENDA_SSH_KEY")
-    elif [ -f "$root/.secrets/agenda_ed25519" ]; then
-      ssh_opts+=(-i "$root/.secrets/agenda_ed25519")
+    elif [ -f "$root/.secrets/agenda_prod_ed25519" ]; then
+      ssh_opts+=(-i "$root/.secrets/agenda_prod_ed25519")
     fi
     host=root@${site.address}
     # Each argument as one word for the remote shell; nothing at all for no argument.
@@ -68,8 +68,8 @@ in
   # daemon's, on a Mac).
   deploy = mk "agenda-deploy" ''
     export AGENDA_HOST=${site.address} AGENDA_KNOWN_HOSTS=${knownHosts}
-    if [ -z "''${AGENDA_SSH_KEY:-}" ] && [ -f "$root/.secrets/agenda_ed25519" ]; then
-      export AGENDA_SSH_KEY="$root/.secrets/agenda_ed25519"
+    if [ -z "''${AGENDA_SSH_KEY:-}" ] && [ -f "$root/.secrets/agenda_prod_ed25519" ]; then
+      export AGENDA_SSH_KEY="$root/.secrets/agenda_prod_ed25519"
     fi
     cd "$root"
     exec ${pkgs.python312}/bin/python3 -I ${../tools/deploy.py} "$@"
