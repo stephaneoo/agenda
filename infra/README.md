@@ -63,6 +63,21 @@ authenticated API: no trust on first use), and a first
 `tools/dev run 'nix run .#check'` (a cold store: 18 min on DEV1-M; 6 min warm). The new VM's IP is the same
 flexible IP.
 
+That `tofu apply` needs a machine with Nix, and the lost VM can't be it (the laptop has none).
+The steps:
+1. Pierre creates a short-lived admin API key in the Scaleway console. The `.env` one expires
+   around 2026-11-01, and one is needed for any Tofu run after that.
+2. In the console, create a throwaway DEV1-S Debian in project `agenda-dev`, with the
+   `agenda_ed25519` public key.
+3. Install Nix there, the same way as `infra/dev/cloud-init.yaml`, and clone the repo from
+   GitHub.
+4. Run the Tofu command above with the key exported for that one command (over stdin, as
+   `run-scw` does).
+5. Delete the throwaway VM and revoke the admin key.
+
+Don't run Tofu from prod: an admin key on the production host widens what a compromise of prod
+can reach.
+
 ## Running Tofu
 
 Only from the laptop through the dev VM, which has Nix, with the Scaleway credentials from

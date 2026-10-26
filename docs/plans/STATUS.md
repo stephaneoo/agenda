@@ -94,6 +94,17 @@ Each batch goes through: implement, review, implementer fixes, security review, 
 - **Waits for Pierre:** the laptop's Little Snitch has not yet allowed `ssh`/`rsync` to 51.158.179.210 (connections time out; the verification went through the old VM as a jump host, before its deletion). Allow it once (the address is stable), then `tools/dev up` works.
 - `nix run nixpkgs#…` (the flakehub registry) times out from the new VM; the repo's flake only uses GitHub inputs, so nothing depends on it.
 
+## Dev VM on demand (2026-10-26)
+- **Setup.** The VM is in its own project `agenda-dev` with its own Tofu state. It is a DEV1-M, powered off when idle, with a stable flexible IP 51.158.179.210, and is driven by `tools/dev up/down/state`.
+- **Key.** `agenda-dev-ops` can list, read and power the dev servers only. Prod is invisible to it, and it can't create anything. It expires on 2027-10-26 (the organisation's one-year maximum).
+- **Cost.** Idle about 6.72 €/month, plus about 0.02 €/hour while up. Power-on to SSH ready takes 27 s.
+- **Review.** One medium fixed: `down` no longer powers off blind when SSH fails. A lost VM's rebuild path is documented (a throwaway VM, a short-lived admin key). Lows left:
+  - parallel auto-start race;
+  - `InstancesServerList` not strictly needed;
+  - dev state in prod's tfstate bucket;
+  - cloud-init `curl | sh` pinned by tag, not by hash.
+- **Needs Pierre.** In Little Snitch, allow ssh/rsync to 51.158.179.210. Until then, `tools/dev down` needs `--force` from the laptop.
+
 ## Open risks
 - **Darwin is unverified.** The flake's darwin outputs evaluate but have never been built on a Mac. Deploys run from the dev VM (the laptop has no Nix), and the Mac code path (`--remote-e2e`) is exercised from there.
 - **The dev VM's reach from the laptop** depends on Little Snitch allowing its address (above).
