@@ -272,6 +272,10 @@
           type = "app";
           program = "${perSystem.${system}.ops.status}/bin/agenda-status-remote";
         };
+        restore = {
+          type = "app";
+          program = "${perSystem.${system}.ops.restore}/bin/agenda-restore-remote";
+        };
         admin-tunnel = {
           type = "app";
           program = "${perSystem.${system}.ops.admin-tunnel}/bin/agenda-admin-tunnel";

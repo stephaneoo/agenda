@@ -43,6 +43,14 @@ in
     exec ssh "''${ssh_opts[@]}" "$host" agenda-status show "$@"
   '';
 
+  # The restore runs on the host (the same agenda-restore the monthly test runs); this only
+  # carries the arguments there. A terminal (-t) so that Ctrl-C reaches it.
+  restore = mk "agenda-restore-remote" ''
+    tty=()
+    if [ -t 0 ]; then tty=(-t); fi
+    exec ssh "''${ssh_opts[@]}" "''${tty[@]}" "$host" agenda-restore "$@"
+  '';
+
   admin-tunnel = mk "agenda-admin-tunnel" ''
     port=''${1:-8000}
     echo "Admin: http://localhost:$port/admin/  (Ctrl-C to close the tunnel)"

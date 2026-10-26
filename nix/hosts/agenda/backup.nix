@@ -6,9 +6,83 @@
   lib,
   pkgs,
   site,
+  agendaStatus,
+  agendaManage,
+  egressRefresh,
   ...
 }:
 let
+  pg = config.services.postgresql.finalPackage;
+  python = "${pkgs.python312}/bin/python3";
+  tz = "PYTHONTZPATH=${pkgs.tzdata}/share/zoneinfo";
+
+  # tools/backup_tiers.py and tools/restore.py, as root commands on the host. (They are
+  # operations scripts, packaged on their own: the app's source excludes tools/.)
+  agendaBackup = pkgs.writeShellApplication {
+    name = "agenda-backup";
+    runtimeInputs = [
+      pkgs.pgbackrest
+      pkgs.util-linux
+      agendaStatus
+    ];
+    text = ''
+      export ${tz}
+      exec ${python} -I ${../../../tools/backup_tiers.py} "$@"
+    '';
+  };
+  agendaRestore = pkgs.writeShellApplication {
+    name = "agenda-restore";
+    runtimeInputs = [
+      pkgs.pgbackrest
+      pkgs.util-linux
+      pkgs.coreutils
+      pkgs.gnugrep
+      pkgs.curl
+      pkgs.bash
+      config.boot.zfs.package
+      config.systemd.package
+      pg
+      agendaStatus
+      agendaManage
+      agendaBackup
+    ];
+    text = ''
+      export ${tz}
+      export PATH="${dirOf egressRefresh}:$PATH"
+      exec ${python} -I ${../../../tools/restore.py} "$@"
+    '';
+  };
+
+  # Timer jobs as root (they drop to postgres and agenda themselves), after the network and
+  # the egress sets.
+  job = description: exec: {
+    inherit description;
+    after = [
+      "postgresql.service"
+      "pgbackrest-stanza.service"
+      "agenda-egress.service"
+      "network-online.target"
+    ];
+    wants = [
+      "agenda-egress.service"
+      "network-online.target"
+    ];
+    requires = [ "postgresql.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      ExecStartPre = egressRefresh;
+      ExecStart = exec;
+      TimeoutStartSec = "3h";
+    };
+  };
+  timer = calendar: {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnCalendar = calendar;
+      Persistent = true;
+      RandomizedDelaySec = "5min";
+    };
+  };
   pgbackrestConf = pkgs.writeText "pgbackrest.conf" ''
     [global]
     repo1-type=s3
@@ -66,10 +140,33 @@ in
     '';
   };
 
+  # archive_command runs inside the postgresql unit, which NixOS sandboxes (ProtectSystem=
+  # strict): the async archiver needs its spool and log directories writable there.
+  systemd.services.postgresql.serviceConfig.ReadWritePaths = [
+    "/var/spool/pgbackrest"
+    "/var/log/pgbackrest"
+  ];
+
   systemd.tmpfiles.rules = [
     "d /var/spool/pgbackrest 0750 postgres postgres -"
     "d /var/log/pgbackrest 0750 postgres postgres -"
   ];
+
+  environment.systemPackages = [
+    agendaBackup
+    agendaRestore
+  ];
+
+  # Every night a full backup with its tier, then the expiry by tier; the monthly restore
+  # test runs steps 1-2 of the restore (tools/restore.py --test-only) on the latest backup.
+  # Each records its outcome in the status file.
+  systemd.services.pgbackrest-backup = job "pgBackRest: full backup, annotated by tier" "${agendaBackup}/bin/agenda-backup run";
+  systemd.timers.pgbackrest-backup = timer "*-*-* 01:30 Europe/Paris";
+  systemd.services.pgbackrest-tier-expire =
+    job "pgBackRest: expire backups past their tier's age" "${agendaBackup}/bin/agenda-backup expire";
+  systemd.timers.pgbackrest-tier-expire = timer "*-*-* 02:30 Europe/Paris";
+  systemd.services.restore-test = job "Restore test: the latest backup into tank/pg-restore, sanity checks" "${agendaRestore}/bin/agenda-restore --test-only";
+  systemd.timers.restore-test = timer "*-*-02 04:00 Europe/Paris";
 
   # The stanza, once the database runs (idempotent: a no-op when it exists and matches).
   systemd.services.pgbackrest-stanza = {

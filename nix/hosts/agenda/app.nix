@@ -7,6 +7,7 @@
   site,
   agendaApp,
   agendaStatus,
+  egressRefresh,
   ...
 }:
 let
@@ -91,7 +92,12 @@ let
 
   # `agenda-manage <command> [args]`: a management command as `agenda`, with the same
   # environment and key as the units (a transient unit, so the key stays a credential).
+  # `--database-url=<url>` first points it at another database (the restore's temporary one).
   agendaManage = pkgs.writeShellScriptBin "agenda-manage" ''
+    db=()
+    case "''${1:-}" in
+      --database-url=*) db=(--setenv="DATABASE_URL=''${1#--database-url=}"); shift ;;
+    esac
     if [ -t 0 ] && [ -t 1 ]; then mode=--pty; else mode=--pipe; fi
     exec ${config.systemd.package}/bin/systemd-run --quiet --wait --collect "$mode" \
       --unit="agenda-manage-$$" \
@@ -101,11 +107,13 @@ let
       -p LoadCredential=${credential} \
       -p After=postgresql.service \
       ${lib.concatStringsSep " " (lib.mapAttrsToList (k: v: "--setenv=${k}=${lib.escapeShellArg v}") env)} \
+      "''${db[@]}" \
       ${python} ${src}/manage.py "$@"
   '';
 in
 {
   environment.systemPackages = [ agendaManage ];
+  _module.args.agendaManage = agendaManage;
 
   # Migrations (axes, ingest and the moderators group included) run before gunicorn starts,
   # at every deploy whose code changed, and before /healthz is checked.
@@ -201,6 +209,8 @@ in
     requires = [ "agenda-migrate.service" ];
     serviceConfig = common // {
       Type = "oneshot";
+      # As root ("+"): the egress sets, fresh, just before the run goes out.
+      ExecStartPre = "+${egressRefresh}";
       ExecStart = "${manage} sync_datatourisme";
       TimeoutStartSec = "1h";
       MemoryMax = "512M";

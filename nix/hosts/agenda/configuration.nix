@@ -32,25 +32,39 @@ let
       pkgs.nftables
       pkgs.getent
       pkgs.gawk
+      pkgs.gnugrep
       pkgs.coreutils
+      config.systemd.package
     ];
     text = ''
-      # Resolve each allowed name (through systemd-resolved, like the jobs do) and replace
-      # the user's set in one nft transaction. A name that doesn't resolve leaves its set
-      # as it was, so a DNS hiccup never empties it.
+      # The names resolve to addresses that change every few minutes (the S3 endpoint has
+      # shown six in an hour). So each set holds every address seen for its names in the
+      # last 24 h: the cached answer (what the jobs get from resolved) and an uncached one,
+      # every minute and right before each job. Replaced in one nft transaction; a name
+      # that doesn't resolve leaves what was seen before.
+      state=/var/lib/agenda-egress
+      now=$(date +%s)
+      ipv4='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
       refresh() {
         local set=$1; shift
-        local ips=()
+        local f=$state/$set
+        touch "$f"
         for name in "$@"; do
-          mapfile -t found < <(getent ahostsv4 "$name" | awk '{print $1}' | sort -u)
-          if [ "''${#found[@]}" -eq 0 ]; then
-            echo "agenda-egress: $name does not resolve; $set kept as it was" >&2
-            return 0
-          fi
-          ips+=("''${found[@]}")
+          {
+            getent ahostsv4 "$name" | awk '{print $1}' || true
+            resolvectl query -4 --cache=no --legend=no "$name" 2>/dev/null | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || true
+          } | grep -E "$ipv4" | sort -u | awk -v t="$now" '{print $1, t}' >> "$f"
         done
+        awk -v cutoff=$((now - 86400)) '
+          $2 > seen[$1] { seen[$1] = $2 }
+          END { for (ip in seen) if (seen[ip] >= cutoff) print ip, seen[ip] }' "$f" | sort > "$f.new"
+        mv "$f.new" "$f"
         local elements
-        elements=$(printf '%s\n' "''${ips[@]}" | sort -u | paste -sd, -)
+        elements=$(awk '{print $1}' "$f" | grep -E "$ipv4" | paste -sd, -)
+        if [ -z "$elements" ]; then
+          echo "agenda-egress: no address known for $set" >&2
+          return 0
+        fi
         printf 'flush set inet agenda_egress %s\nadd element inet agenda_egress %s { %s }\n' \
           "$set" "$set" "$elements" | nft -f -
         echo "agenda-egress: $set = $elements"
@@ -159,15 +173,19 @@ in
     serviceConfig = {
       Type = "oneshot";
       ExecStart = "${egressRefresh}/bin/agenda-egress-refresh";
+      StateDirectory = "agenda-egress";
+      StateDirectoryMode = "0700";
     };
   };
   systemd.timers.agenda-egress = {
     wantedBy = [ "timers.target" ];
     timerConfig = {
-      OnBootSec = "1min";
-      OnUnitActiveSec = "10min";
+      OnBootSec = "30s";
+      OnUnitActiveSec = "1min";
+      AccuracySec = "10s";
     };
   };
+  _module.args.egressRefresh = "${egressRefresh}/bin/agenda-egress-refresh";
 
   # --- Access: root by key only.
   services.openssh = {
