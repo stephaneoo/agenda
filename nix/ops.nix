@@ -27,6 +27,8 @@ let
     name: text:
     pkgs.writeShellApplication {
       inherit name;
+      # The shared prelude sets the SSH variables; not every command uses all of them.
+      excludeShellChecks = [ "SC2034" ];
       # On a Mac, Apple's ssh (/usr/bin): nixpkgs' would refuse Apple-only options such as
       # UseKeychain in ~/.ssh/config, and the system's agent and keychain belong to it.
       runtimeInputs = lib.optional (!pkgs.stdenv.isDarwin) pkgs.openssh ++ [

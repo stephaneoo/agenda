@@ -7,6 +7,7 @@
   lib,
   self,
   host,
+  ops,
   agendaApp,
   pkgs,
   venv,
@@ -112,6 +113,14 @@ in
   host-eval = pkgs.writeText "agenda-host-eval" (
     builtins.unsafeDiscardStringContext host.config.system.build.toplevel.drvPath
   );
+
+  # The laptop apps build (shellcheck runs on each), on every system.
+  ops-apps = pkgs.linkFarmFromDrvs "agenda-ops-apps" [
+    ops.status
+    ops.restore
+    ops.deploy
+    ops.admin-tunnel
+  ];
 
   # Every package in uv.lock comes from files.pythonhosted.org.
   lock-sources = withSource "agenda-lock-sources" ''

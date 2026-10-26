@@ -294,6 +294,7 @@
           host = agendaHost;
           inherit (perSystem.${system})
             pkgs
+            ops
             agendaApp
             venv
             postgisFixture
