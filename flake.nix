@@ -127,7 +127,6 @@
               venv
               postgisFixture
               e2ePython
-              pkgs.git
               pkgs.coreutils
             ];
             text = ''
@@ -140,7 +139,11 @@
               status_dir=$(mktemp -d)
               trap 'rm -rf "$status_dir"' EXIT
               export AGENDA_STATUS_FILE="$status_dir/status.json"
-              cd "$(git rev-parse --show-toplevel)"
+              # The root: AGENDA_E2E_ROOT (the deploy sets it on the host), else this flake's
+              # own source, which is what was committed. Never the working directory or git:
+              # over SSH there is neither (tools/e2e_offline.py refuses a root without fixtures).
+              export AGENDA_E2E_ROOT="''${AGENDA_E2E_ROOT:-${self}}"
+              cd "$AGENDA_E2E_ROOT"
               postgis-fixture ${e2ePython}/bin/python -I tools/e2e_offline.py ${venv}/bin/python
             '';
           };
@@ -267,6 +270,10 @@
         travel-matrix = {
           type = "app";
           program = "${perSystem.${system}.travelMatrix}/bin/travel-matrix";
+        };
+        ssh = {
+          type = "app";
+          program = "${perSystem.${system}.ops.ssh}/bin/agenda-ssh";
         };
         status = {
           type = "app";

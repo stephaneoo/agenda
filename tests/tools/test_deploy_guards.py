@@ -177,3 +177,52 @@ def test_command_output_keeps_stderr_apart() -> None:
     """ssh warnings go to stderr; the answer parsed (healthz, the previous generation) is stdout."""
     res = deploy._subprocess(["sh", "-c", "echo 'ssh: a warning' >&2; echo '{\"status\": \"ok\", \"debug\": false}'"])
     assert res.code == 0 and deploy.healthy(res.out) and "warning" not in res.out
+
+
+def test_from_a_mac_the_e2e_runs_on_the_host_with_the_bounded_command(repo) -> None:
+    archive = json.dumps({"path": "/nix/store/abc123-source"})
+    stub = Stub({"flake archive": (0, archive)})
+    assert run(repo, stub, linux=False) == 0
+    e2e = stub.calls[stub.index("#e2e")]
+    assert e2e.startswith("ssh ") and deploy.remote_e2e_command("/nix/store/abc123-source") in e2e
+    assert not stub.called("nix run .#e2e")
+
+
+def test_from_a_mac_an_unreadable_flake_archive_refuses(repo) -> None:
+    stub = Stub({"flake archive": (0, "not json")})
+    assert run(repo, stub, linux=False) == 1
+    assert not stub.called("#e2e") and not stub.called("deploy-rs")
+
+
+def test_refuses_when_another_deploy_holds_the_host_lock(repo) -> None:
+    stub = Stub()
+    rc = deploy.run(repo, runner=stub, linux=True, sleep=lambda _: None, now=lambda: "20261026T101500Z",
+                    lock=lambda: deploy.LockHeld(False, "held by another deploy"))
+    assert rc == 1
+    assert not stub.called("deploy-rs") and not stub.called("--print-out-paths")
+
+
+def test_the_host_lock_is_held_across_build_activation_and_tag(repo) -> None:
+    stub = Stub()
+    events: list[str] = []
+
+    class Lock:
+        acquired = True
+        why = ""
+
+        def release(self) -> None:
+            events.append(f"release after {len(stub.calls)} calls")
+
+    def lock():
+        events.append(f"acquire after {len(stub.calls)} calls")
+        return Lock()
+
+    assert deploy.run(repo, runner=stub, linux=True, sleep=lambda _: None, now=lambda: "20261026T101500Z",
+                      lock=lock) == 0
+    acquired = int(events[0].split()[-2])
+    released = int(events[1].split()[-2])
+    assert acquired <= stub.index("--print-out-paths") and released > stub.index(" push --quiet origin deploy-")
+
+
+def test_the_lock_command_uses_flock_on_the_host() -> None:
+    assert "flock -n" in deploy.LOCK_COMMAND and "/run/agenda-deploy.lock" in deploy.LOCK_COMMAND

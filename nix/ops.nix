@@ -1,6 +1,7 @@
 # The laptop's commands against the prod host (any system, a Mac included). They only need
 # ssh: everything Linux runs on the host itself.
 #   nix run .#status                 the MOTD report, over SSH
+#   nix run .#ssh -- '<command>'     a command on the host as root (no command: a shell)
 #   nix run .#admin-tunnel           the admin on http://localhost:8000/admin/ (Ctrl-C closes it)
 #   nix run .#restore -- [args]      tools/restore.py on the host (Task 15)
 #   nix run .#deploy                 tools/deploy.py (Task 16)
@@ -22,6 +23,8 @@ let
       ssh_opts+=(-i "$root/.secrets/agenda_ed25519")
     fi
     host=root@${site.address}
+    # Each argument as one word for the remote shell; nothing at all for no argument.
+    quoted() { if [ "$#" -gt 0 ]; then printf '%q ' "$@"; fi; }
   '';
   mk =
     name: text:
@@ -41,8 +44,16 @@ in
 {
   inherit knownHosts sshPrelude;
 
+  # Arguments cross a remote shell: each is quoted (printf %q) so it stays one word.
   status = mk "agenda-status-remote" ''
-    exec ssh "''${ssh_opts[@]}" "$host" agenda-status show "$@"
+    exec ssh "''${ssh_opts[@]}" "$host" "agenda-status show $(quoted "$@")"
+  '';
+
+  # The command is one string, run by root's shell on the host (as with plain ssh).
+  ssh = mk "agenda-ssh" ''
+    tty=()
+    if [ -t 0 ]; then tty=(-t); fi
+    exec ssh "''${ssh_opts[@]}" "''${tty[@]}" "$host" "$@"
   '';
 
   # The restore runs on the host (the same agenda-restore the monthly test runs); this only
@@ -50,7 +61,7 @@ in
   restore = mk "agenda-restore-remote" ''
     tty=()
     if [ -t 0 ]; then tty=(-t); fi
-    exec ssh "''${ssh_opts[@]}" "''${tty[@]}" "$host" agenda-restore "$@"
+    exec ssh "''${ssh_opts[@]}" "''${tty[@]}" "$host" "agenda-restore $(quoted "$@")"
   '';
 
   # tools/deploy.py, from the working tree's root. nix itself comes from the user's PATH (the

@@ -117,6 +117,7 @@ in
   # The laptop apps build (shellcheck runs on each), on every system.
   ops-apps = pkgs.linkFarmFromDrvs "agenda-ops-apps" [
     ops.status
+    ops.ssh
     ops.restore
     ops.deploy
     ops.admin-tunnel

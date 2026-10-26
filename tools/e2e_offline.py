@@ -1,6 +1,10 @@
 """End-to-end check of offline reading in headless Chromium (nix run .#e2e, Linux).
 
-    postgis-fixture python tools/e2e_offline.py <venv python>
+    AGENDA_E2E_ROOT=<repo or flake source> postgis-fixture python tools/e2e_offline.py <venv python>
+
+The root is AGENDA_E2E_ROOT, never the working directory or git: on the host (a deploy from
+a Mac) it is the flake source in the Nix store. Without it, or without the fixtures under it,
+the run refuses.
 
 Seeds a database (tools/e2e_seed.py), starts the app on 127.0.0.1, then in Chromium:
 loads /, waits until the service worker controls the page and the IndexedDB copy is saved,
@@ -24,10 +28,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from playwright.sync_api import sync_playwright
+FIXTURE_PATH = "tests/fixtures/filter-cases.json"
+FIXTURE: dict = {}
 
-ROOT = Path.cwd()
-FIXTURE = json.loads((ROOT / "tests/fixtures/filter-cases.json").read_text(encoding="utf-8"))
+
+def resolve_root(env) -> Path:
+    """The repository the e2e runs from: AGENDA_E2E_ROOT, which must hold the fixtures."""
+    value = env.get("AGENDA_E2E_ROOT") or ""
+    if not value or not Path(value).is_dir():
+        raise SystemExit(f"e2e: AGENDA_E2E_ROOT must name the repository or flake source (got {value!r})")
+    root = Path(value)
+    if not (root / FIXTURE_PATH).is_file():
+        raise SystemExit(f"e2e: {root / FIXTURE_PATH} not found: AGENDA_E2E_ROOT is not the repository")
+    return root
 PORT = int(os.environ.get("E2E_PORT", "8765"))
 BASE = f"http://127.0.0.1:{PORT}"
 NOW = datetime(2026, 11, 1, 9, 0, tzinfo=ZoneInfo("Europe/Paris"))
@@ -80,6 +93,12 @@ def titles(page, selector: str) -> list[str]:
 
 
 def main(venv_python: str) -> None:
+    from playwright.sync_api import sync_playwright
+
+    global FIXTURE
+    root = resolve_root(os.environ)
+    os.chdir(root)
+    FIXTURE = json.loads((root / FIXTURE_PATH).read_text(encoding="utf-8"))
     subprocess.run([venv_python, "-m", "tools.e2e_seed"], check=True)
     server = subprocess.Popen([venv_python, "manage.py", "runserver", "--noreload", f"127.0.0.1:{PORT}"])
     violations: list[str] = []

@@ -52,6 +52,45 @@ class Result:
 
 Runner = Callable[[list[str]], Result]
 
+# One deploy at a time on the host: an flock held by an SSH session for the build, the
+# activation, /healthz and the tag; it goes when the session's stdin closes (or the laptop
+# drops), so a crashed deploy never leaves it behind.
+LOCK_COMMAND = "exec flock -n /run/agenda-deploy.lock sh -c 'echo locked; read -r _'"
+
+
+@dataclass
+class LockHeld:
+    acquired: bool
+    why: str = ""
+
+    def release(self) -> None:
+        pass
+
+
+class HostLock:
+    acquired = True
+    why = ""
+
+    def __init__(self, proc: subprocess.Popen) -> None:
+        self.proc = proc
+
+    def release(self) -> None:
+        assert self.proc.stdin is not None
+        self.proc.stdin.close()
+        try:
+            self.proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+
+def ssh_lock(ssh_argv: list[str]) -> HostLock | LockHeld:
+    proc = subprocess.Popen([*ssh_argv, LOCK_COMMAND], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert proc.stdout is not None
+    if proc.stdout.readline().strip() == "locked":
+        return HostLock(proc)
+    proc.wait()
+    return LockHeld(False, "another deploy holds /run/agenda-deploy.lock on the host (or SSH failed)")
+
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True).stdout.strip()
@@ -83,6 +122,21 @@ def preflight(snap: Snapshot) -> list[str]:
     return reasons
 
 
+# On the host the e2e (Chromium, a PostgreSQL, the app) shares 4 GB with production: bounded
+# in its own unit, at low CPU priority, so the OOM killer picks it before the live database.
+E2E_LIMITS = ["MemoryMax=1200M", "MemorySwapMax=0", "CPUWeight=20", "PrivateTmp=yes", "WorkingDirectory=/"]
+
+
+def remote_e2e_command(path: str) -> str:
+    """The shell command the host runs for the e2e from a Mac: the flake source at `path`
+    (copied with `nix flake archive`) is both what runs and the e2e's root."""
+    argv = ["systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--service-type=exec"]
+    for prop in E2E_LIMITS:
+        argv += ["-p", prop]
+    argv += ["--setenv=HOME=/tmp", f"--setenv=AGENDA_E2E_ROOT={path}", "--", "nix", "run", f"{path}#e2e"]
+    return " ".join(shlex.quote(a) for a in argv)
+
+
 def healthy(body: str) -> bool:
     try:
         data = json.loads(body)
@@ -96,7 +150,8 @@ def _site() -> tuple[str, Path]:
     return os.environ.get("AGENDA_HOST", "51.15.79.107"), Path(os.environ.get("AGENDA_KNOWN_HOSTS", "nix/hosts/agenda/known_hosts"))
 
 
-def run(repo: Path, *, runner: Runner, linux: bool, sleep: Callable[[float], None] = time.sleep,
+def run(repo: Path, *, runner: Runner, linux: bool, lock: Callable[[], HostLock | LockHeld] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
         now: Callable[[], str] = lambda: datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
         log: Callable[[str], None] = lambda l: print(l, flush=True)) -> int:
     address, known_hosts = _site()
@@ -142,15 +197,34 @@ def run(repo: Path, *, runner: Runner, linux: bool, sleep: Callable[[float], Non
             return _refused(log)
         try:
             path = json.loads(src.out)["path"]
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, TypeError):
             path = ""
-        log("== checks: offline e2e (Chromium), on the host")
-        e2e = ssh(f"nix run {shlex.quote(path + '#e2e')}")
+        if not path.startswith("/nix/store/"):
+            log(f"   FAILED: no store path from `nix flake archive`: {src.out.strip()[:300]!r}")
+            return _refused(log)
+        log("== checks: offline e2e (Chromium), on the host, bounded")
+        e2e = ssh(remote_e2e_command(path))
         if e2e.code != 0:
             log(f"   FAILED: e2e\n{e2e.out.strip()[-2000:]}")
     if e2e.code != 0:
         return _refused(log)
 
+    # 3-6 under the host's deploy lock (main() passes ssh_lock; tests pass their own).
+    held = lock() if lock else LockHeld(True)
+    if not held.acquired:
+        log(f"Deploy refused: {held.why}.")
+        return 1
+    try:
+        return _activate(repo, runner=runner, ssh=ssh, step=step, ssh_opts=ssh_opts, host=host, commit=commit,
+                         sleep=sleep, now=now, log=log)
+    finally:
+        held.release()
+
+
+def _activate(repo: Path, *, runner: Runner, ssh: Callable[[str], Result],
+              step: Callable[[str, list[str]], Result], ssh_opts: list[str], host: str,
+              commit: str, sleep: Callable[[float], None], now: Callable[[], str],
+              log: Callable[[str], None]) -> int:
     # 3. Build on the host.
     built = step("build the system on the host",
                  ["env", f"NIX_SSHOPTS={' '.join(ssh_opts)}", "nix", "build", "--no-link", "--print-out-paths",
@@ -224,10 +298,18 @@ def _subprocess(cmd: list[str]) -> Result:
     return Result(proc.wait(), "".join(out))
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     repo = Path(_git(Path.cwd(), "rev-parse", "--show-toplevel") or Path.cwd())
     os.chdir(repo)
-    return run(repo, runner=_subprocess, linux=platform.system() == "Linux")
+    # --remote-e2e: the Mac's path (the e2e on the host) from a Linux machine, to test it.
+    linux = platform.system() == "Linux" and "--remote-e2e" not in argv
+    address, known_hosts = _site()
+    ssh_argv = ["ssh", "-o", f"UserKnownHostsFile={known_hosts}", "-o", "StrictHostKeyChecking=yes"]
+    if key := os.environ.get("AGENDA_SSH_KEY"):
+        ssh_argv += ["-i", key]
+    ssh_argv.append(f"root@{address}")
+    return run(repo, runner=_subprocess, linux=linux, lock=lambda: ssh_lock(ssh_argv))
 
 
 if __name__ == "__main__":
