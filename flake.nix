@@ -272,6 +272,10 @@
           type = "app";
           program = "${perSystem.${system}.ops.status}/bin/agenda-status-remote";
         };
+        deploy = {
+          type = "app";
+          program = "${perSystem.${system}.ops.deploy}/bin/agenda-deploy";
+        };
         restore = {
           type = "app";
           program = "${perSystem.${system}.ops.restore}/bin/agenda-restore-remote";

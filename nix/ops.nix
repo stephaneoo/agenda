@@ -51,6 +51,17 @@ in
     exec ssh "''${ssh_opts[@]}" "''${tty[@]}" "$host" agenda-restore "$@"
   '';
 
+  # tools/deploy.py, from the working tree's root. nix itself comes from the user's PATH (the
+  # daemon's, on a Mac).
+  deploy = mk "agenda-deploy" ''
+    export AGENDA_HOST=${site.address} AGENDA_KNOWN_HOSTS=${knownHosts}
+    if [ -z "''${AGENDA_SSH_KEY:-}" ] && [ -f "$root/.secrets/agenda_ed25519" ]; then
+      export AGENDA_SSH_KEY="$root/.secrets/agenda_ed25519"
+    fi
+    cd "$root"
+    exec ${pkgs.python312}/bin/python3 -I ${../tools/deploy.py} "$@"
+  '';
+
   admin-tunnel = mk "agenda-admin-tunnel" ''
     port=''${1:-8000}
     echo "Admin: http://localhost:$port/admin/  (Ctrl-C to close the tunnel)"
