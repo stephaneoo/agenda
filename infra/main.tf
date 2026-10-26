@@ -110,8 +110,22 @@ resource "scaleway_object_bucket" "wals" {
     role    = "pgbackrest"
   }
 
+  # Versioned, so that the pgbackrest key (on the host) can't destroy the backups: its
+  # deletes and overwrites leave the previous version behind, and its bucket policy grants
+  # neither s3:DeleteObjectVersion nor any change to versioning or the lifecycle. A deleted
+  # backup or WAL file stays recoverable for 30 days (docs/ops/RUNBOOK.md, "Backups deleted
+  # from the bucket").
   versioning {
-    enabled = false
+    enabled = true
+  }
+
+  lifecycle_rule {
+    id      = "noncurrent-30-days"
+    enabled = true
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
   }
 
   lifecycle {

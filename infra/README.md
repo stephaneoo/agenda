@@ -5,7 +5,8 @@
 | VM `agenda-prod`, DEV1-M x86_64 | nl-ams-1 | Debian image only for the nixos-anywhere bootstrap. 20 GB SBS root volume. |
 | Block volume `agenda-zfs`, 50 GB, 5K IOPS | nl-ams-1 | The ZFS pool `tank`. |
 | Flexible IPv4 | nl-ams-1 | `tofu output public_ip`. |
-| Bucket `agenda-wals` | fr-par | pgBackRest repository. No versioning, private. |
+| Security group `agenda-prod` | nl-ams-1 | The VM only: inbound 22, 80, 443/tcp and ICMP, the rest dropped; outbound open; stateful. The dev VM keeps the zone's default group. |
+| Bucket `agenda-wals` | fr-par | pgBackRest repository. Versioned, noncurrent versions expire after 30 days (undeleting: `docs/ops/RUNBOOK.md`, "Backups deleted from the bucket"), private. |
 | Bucket `agenda-assets` | fr-par | django-storages (empty in v1). Versioned, noncurrent versions expire after 180 days, private. |
 | Bucket `agenda-tfstate` | fr-par | Tofu state, versioned. Created by hand (below), not managed here except for its policy. |
 | IAM applications `pgbackrest`, `django-storage` + one API key each | | See "Scoping". |
@@ -55,8 +56,16 @@ policy then admits only the principals it names (the project owner included). So
   `agenda-assets` the `django-storage` app, `agenda-tfstate` nobody else.
 
 Checked on 2026-10-25: the pgbackrest key writes and lists `agenda-wals`, and gets
-AccessDenied on `agenda-assets` and `agenda-tfstate`. **A new bucket in this project must get a
-bucket policy too**, or both application keys can read it.
+AccessDenied on `agenda-assets` and `agenda-tfstate`. Checked on 2026-10-26, with versioning
+on: its delete leaves a delete marker, and deleting a version (`s3:DeleteObjectVersion`, not in
+its bucket policy) gets AccessDenied. The IAM permission set `ObjectStorageObjectsDelete` can't
+tell the two apart; the bucket policy does.
+
+**Accepted for v1: Scaleway IAM can't scope a permission to one bucket**, only to a project.
+So the bucket policies are the only thing keeping each key to its own bucket. **Every new
+bucket in this project must get a bucket policy** (admins plus at most one application, as
+`scaleway_object_bucket_policy.scoped` does), in the same change that creates it; without one,
+both application keys can read, write and delete in it.
 
 ## Key expiry
 
