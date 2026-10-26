@@ -64,6 +64,45 @@ def check(condition: bool, what: str) -> None:
     print(f"e2e: ok: {what}")
 
 
+def _listening_inodes(port: int, proc: Path = Path("/proc")) -> set[str]:
+    """The socket inodes listening on 127.0.0.1:`port` (or any address) in this network
+    namespace, from /proc/net/tcp (Linux only, as is the e2e)."""
+    found = set()
+    for table in ("tcp", "tcp6"):
+        try:
+            lines = (proc / "net" / table).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            f = line.split()
+            if len(f) > 9 and f[3] == "0A" and int(f[1].rsplit(":", 1)[1], 16) == port:
+                found.add(f[9])
+    return found
+
+
+def _socket_inodes(pid: int, proc: Path = Path("/proc")) -> set[str]:
+    found = set()
+    try:
+        fds = list((proc / str(pid) / "fd").iterdir())
+    except OSError:
+        return found
+    for fd in fds:
+        try:
+            target = os.readlink(fd)
+        except OSError:
+            continue
+        if target.startswith("socket:["):
+            found.add(target[8:-1])
+    return found
+
+
+def owns_port(pid: int, port: int, proc: Path = Path("/proc")) -> bool:
+    """Whether every listener on `port` is a socket of process `pid`: the server answering is
+    the e2e's own child, not something else that took the port first."""
+    listening = _listening_inodes(port, proc)
+    return bool(listening) and listening <= _socket_inodes(pid, proc)
+
+
 def wait_for_server(server: subprocess.Popen) -> None:
     for _ in range(100):
         if server.poll() is not None:
@@ -71,6 +110,8 @@ def wait_for_server(server: subprocess.Popen) -> None:
         try:
             with urllib.request.urlopen(f"{BASE}/healthz", timeout=2) as r:
                 if r.status == 200:
+                    if server.poll() is not None or not owns_port(server.pid, PORT):
+                        raise SystemExit(f"e2e: something else answers on port {PORT}, not the e2e's app")
                     return
         except OSError:
             time.sleep(0.3)
@@ -100,12 +141,16 @@ def main(venv_python: str) -> None:
     os.chdir(root)
     FIXTURE = json.loads((root / FIXTURE_PATH).read_text(encoding="utf-8"))
     subprocess.run([venv_python, "-m", "tools.e2e_seed"], check=True)
+    if _listening_inodes(PORT):
+        raise SystemExit(f"e2e: port {PORT} is already taken")
     server = subprocess.Popen([venv_python, "manage.py", "runserver", "--noreload", f"127.0.0.1:{PORT}"])
     violations: list[str] = []
     try:
         wait_for_server(server)
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            # Chromium's own sandbox whenever it can have one: not as root (the dev VM's
+            # check), where Chromium refuses it.
+            browser = p.chromium.launch(chromium_sandbox=os.geteuid() != 0)
             context = browser.new_context(locale="fr-FR", timezone_id="Europe/Paris")
             context.clock.set_fixed_time(NOW)
             context.add_init_script(CSP_PROBE)

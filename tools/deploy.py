@@ -5,8 +5,9 @@
 1. Refuse if the tree has uncommitted changes, if this isn't `main`, or if `main` differs
    from `origin/main` after fetching branches and tags (preflight, pure over a Snapshot).
 2. The checks, the same as `nix run .#check`: `nix flake check`, the expand/contract migration
-   lint (and the OpenAPI version check), then the offline e2e in Chromium. The e2e needs
-   Linux: from a Mac it runs on the host, from the commit unpacked there, bounded.
+   lint (and the OpenAPI version check), then, under the host's locks (no other deploy, no
+   restore), the offline e2e in Chromium. The e2e needs Linux: from a Mac it runs on the
+   host, from the commit unpacked there, bounded, unprivileged, without network.
 3. Build the system on the host (`--store ssh-ng://`: a Mac never builds Linux), and refuse a
    closure with a browser in it.
 4. deploy-rs, with magic rollback: the host reverts by itself unless the new generation
@@ -137,9 +138,23 @@ def preflight(snap: Snapshot) -> list[str]:
     return reasons
 
 
-# On the host the e2e (Chromium, a PostgreSQL, the app) shares 4 GB with production: in a
-# bounded scope, at low CPU priority, so the OOM killer picks it before the live database.
+# On the host the e2e (Chromium, a PostgreSQL, the app) shares 4 GB with production: bounded,
+# at low CPU priority, so the OOM killer picks it before the live database. The evaluation
+# (root, `nix build`) gets the same bounds as the run.
 E2E_LIMITS = ["MemoryMax=1200M", "MemorySwapMax=0", "CPUWeight=20"]
+# The run itself: a transient service as an ephemeral unprivileged user (DynamicUser, which
+# also makes the file system read-only to it but for its private /tmp), in its own network
+# namespace with only `lo` (PrivateNetwork), so its port 8765 and its PostgreSQL socket are
+# out of reach of every other process on the host, and nothing on the host is in its reach.
+E2E_SANDBOX = [
+    "DynamicUser=yes",
+    "PrivateNetwork=yes",
+    "PrivateTmp=yes",
+    "PrivateDevices=yes",
+    "ProtectHome=yes",
+    "NoNewPrivileges=yes",
+    "RuntimeMaxSec=1h",
+]
 
 
 E2E_DIR = "/var/lib/agenda-e2e"
@@ -147,11 +162,12 @@ E2E_DIR = "/var/lib/agenda-e2e"
 
 def upload_e2e_tree_command() -> str:
     """The host side of `git archive HEAD | ssh host <this>`: unpack the commit into a fresh
-    root-only directory and print its path. A
-    tarball, not `nix flake archive`: copying the source into the host's store failed with a
-    hash mismatch between Determinate Nix and the host's Nix (2026-10-26)."""
-    return (f"umask 077 && mkdir -p {E2E_DIR} && d=$(mktemp -d {E2E_DIR}/run.XXXXXX) && "
-            f"tar -x -C \"$d\" && echo \"$d\"")
+    directory and print its path. Owned and writable by root only, readable by the e2e's
+    ephemeral user (it is the public source). A tarball, not `nix flake archive`: copying the
+    source into the host's store failed with a hash mismatch between Determinate Nix and the
+    host's Nix (2026-10-26)."""
+    return (f"umask 022 && install -d -m 0755 {E2E_DIR} && d=$(mktemp -d {E2E_DIR}/run.XXXXXX) && "
+            f"chmod 0755 \"$d\" && tar -x --no-same-owner -C \"$d\" && echo \"$d\"")
 
 
 def cleanup_e2e_command(path: str) -> str:
@@ -161,20 +177,26 @@ def cleanup_e2e_command(path: str) -> str:
 
 
 def remote_e2e_command(path: str) -> str:
-    """The shell command the host runs for the e2e from a Mac: the commit unpacked at `path`
-    is both the flake that runs and the e2e's root.
+    """The shell command the host runs, as root, for the e2e from a Mac: the commit unpacked at
+    `path` is both the flake and the e2e's root.
 
-    A scope (`systemd-run --scope`), so its output comes straight back over SSH. The settings
-    refuse AGENDA_DEV under systemd, by INVOCATION_ID, which a scope gets too: the e2e is a
-    dev-mode harness on its own throwaway database and port, so this one command drops the
-    variable (`env -u`). Every app unit keeps it, and AGENDA_ENV=production refuses dev mode
-    there regardless."""
-    argv = ["systemd-run", "--scope", "--quiet", "--collect"]
+    1. Root builds the e2e (`nix build`; the nix-daemon serves root only), in a bounded scope.
+    2. The run: `systemd-run --wait --pipe`, a transient service (E2E_SANDBOX, E2E_LIMITS)
+       whose output comes straight back over SSH. The settings refuse AGENDA_DEV under
+       systemd, by INVOCATION_ID: the e2e is a dev-mode harness on its own throwaway database
+       and port, so this one command drops the variable (`env -u`). Every app unit keeps it,
+       and AGENDA_ENV=production refuses dev mode there regardless."""
+    q = shlex.quote
+    scope = ["systemd-run", "--scope", "--quiet", "--collect"]
     for prop in E2E_LIMITS:
-        argv += ["-p", prop]
-    argv += ["--", "env", "-u", "INVOCATION_ID", f"AGENDA_E2E_ROOT={path}",
-             "nix", "run", f"path:{path}#e2e"]
-    return " ".join(shlex.quote(a) for a in argv)
+        scope += ["-p", prop]
+    build = " ".join(q(a) for a in [*scope, "--", "nix", "build", "--no-link", "--print-out-paths", f"path:{path}#e2e"])
+    service = ["systemd-run", "--wait", "--pipe", "--quiet", "--collect"]
+    for prop in [*E2E_LIMITS, *E2E_SANDBOX, f"WorkingDirectory={path}"]:
+        service += ["-p", prop]
+    run = " ".join(q(a) for a in [*service, "--", "env", "-u", "INVOCATION_ID", "HOME=/tmp", f"AGENDA_E2E_ROOT={path}"])
+    return (f"out=$({build}) && case \"$out\" in /nix/store/*) ;; *) echo \"e2e: no build\" >&2; "
+            f"exit 1;; esac && {run} \"$out/bin/e2e\"")
 
 
 def healthy(body: str) -> bool:

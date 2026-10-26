@@ -226,11 +226,19 @@
       };
     in
     {
-      packages = forAllSystems (system: {
-        venv = perSystem.${system}.venv;
-        postgis-fixture = perSystem.${system}.postgisFixture;
-        deploy-rs = deploy-rs.packages.${system}.default;
-      });
+      packages = forAllSystems (
+        system:
+        {
+          venv = perSystem.${system}.venv;
+          postgis-fixture = perSystem.${system}.postgisFixture;
+          deploy-rs = deploy-rs.packages.${system}.default;
+        }
+        # The e2e as a package: on the host, root builds it (the nix-daemon serves root only)
+        # and an unprivileged unit runs it (tools/deploy.py, remote_e2e_command).
+        // lib.optionalAttrs nixpkgs.legacyPackages.${system}.stdenv.isLinux {
+          e2e = perSystem.${system}.e2e;
+        }
+      );
 
       nixosConfigurations.agenda = agendaHost;
 
