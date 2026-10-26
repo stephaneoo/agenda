@@ -56,9 +56,10 @@ reads the VM's public IP. Nothing else. Scaleway's quotas are per organisation o
 per-project limit), so none is set; the key can't create anything for one to cap.
 
 **A rebuild** (lost or broken VM): `tofu apply -replace=scaleway_instance_server.dev` after
-lifting `prevent_destroy`, then `tools/dev pin` (it checks the host key against the
-fingerprints Scaleway's agent publishes in the server's user data, over the authenticated
-API: no trust on first use), write the new server ID in `.secrets/dev-server-id`, and a first
+lifting `prevent_destroy`, write the new server ID in `.secrets/dev-server-id` (`tofu output
+server_id`; `tools/dev` reads it for every API call), then `tools/dev pin` (it checks the host
+key against the fingerprints Scaleway's agent publishes in the server's user data, over the
+authenticated API: no trust on first use), and a first
 `tools/dev run 'nix run .#check'` (a cold store: 18 min on DEV1-M; 6 min warm). The new VM's IP is the same
 flexible IP.
 

@@ -208,7 +208,7 @@ vm_up() {
 }
 
 vm_down() {
-  local force=${1:-} busy
+  local force=${1:-} busy rc
   refresh
   case "$state" in
     stopped) echo "agenda-dev: already down"; return 0 ;;
@@ -217,11 +217,16 @@ vm_down() {
       if [ "$state" = starting ]; then wait_state running; fi
       if [ "$state" = running ] && [ "$force" != --force ]; then
         # Something still at work (a deploy, a check, Tofu, a long job)? The brackets keep
-        # this command's own line from matching.
+        # this command's own line from matching. pgrep exits 1 when nothing matches; any
+        # other failure (ssh: 255) means we couldn't look, so don't power off blind.
         busy=$(ssh "${ssh_opts[@]}" "$host" \
-          'pgrep -a -f "[n]ix (run|build|develop|flake|copy)|[t]ofu |[p]ytest|[d]eploy-rs|[n]ixos-anywhere|[r]sync --server"' 2>/dev/null || true)
-        if [ -n "$busy" ]; then
+          'pgrep -a -f "[n]ix (run|build|develop|flake|copy)|[t]ofu |[p]ytest|[d]eploy-rs|[n]ixos-anywhere|[r]sync --server"' 2>/dev/null) &&
+          rc=0 || rc=$?
+        if [ "$rc" -eq 0 ] && [ -n "$busy" ]; then
           printf 'tools/dev: agenda-dev is busy, not powering off (--force to anyway):\n%s\n' "$busy" >&2
+          exit 1
+        elif [ "$rc" -ne 1 ]; then
+          echo "tools/dev: can't check what runs on agenda-dev (ssh exit $rc), not powering off (--force to anyway)" >&2
           exit 1
         fi
       fi

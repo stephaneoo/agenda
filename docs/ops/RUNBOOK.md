@@ -189,9 +189,12 @@ start/stop/read.
 - "the Scaleway API can't be reached": the laptop is offline (or its firewall blocks
   `api.scaleway.com`).
 - "running but SSH doesn't answer after 5 min": try `tools/dev ssh`; if the host key changed
-  (`REMOTE HOST IDENTIFICATION HAS CHANGED`), the VM was rebuilt: `tools/dev pin`. If it still
-  doesn't answer, check the laptop's firewall (Little Snitch) allows `ssh` and `rsync` to the
-  address in `.secrets/dev-ip`.
+  (`REMOTE HOST IDENTIFICATION HAS CHANGED`), the VM was rebuilt: the new server ID in
+  `.secrets/dev-server-id` first, then `tools/dev pin`. If it still doesn't answer, check the
+  laptop's firewall (Little Snitch) allows `ssh` and `rsync` to the address in `.secrets/dev-ip`.
+- "can't check what runs on agenda-dev (ssh exit …)" from `down`: SSH doesn't reach the VM, so
+  `down` can't see whether a deploy or check still runs there. If nothing can be running (no
+  session started one), `tools/dev down --force`.
 
 ### The dev VM's key
 

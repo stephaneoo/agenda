@@ -50,7 +50,7 @@ resource "scaleway_block_volume" "zfs" {
 
 # In front of the host's own firewall (nftables, the same ports): inbound SSH, HTTP, HTTPS and
 # ICMP only, the rest dropped; replies to outbound traffic come back (stateful). Prod only:
-# the dev VM keeps the zone's default group.
+# the dev VM has its own group in its own project (infra/dev/).
 resource "scaleway_instance_security_group" "prod" {
   name                    = "agenda-prod"
   description             = "agenda prod: inbound 22, 80, 443 and ICMP only"

@@ -85,7 +85,8 @@ show it (`run`, `run-scw`, `run-agent`, `pull` and `ssh` start it when off), wit
 `agenda-dev-ops` key in `.secrets/scw-dev.env`: start, stop and read the servers of project
 `agenda-dev`, nothing else (not `.env`'s admin token). It lives in its own Scaleway project and
 OpenTofu state (`infra/dev/`, `infra/README.md`), apart from prod's. `tools/dev down` refuses
-while a deploy, check, Tofu or rsync runs there (`--force` to anyway).
+while a deploy, check, Tofu or rsync runs there, or when SSH can't reach it to look (`--force`
+to anyway).
 
 ## Operations
 
