@@ -1,21 +1,32 @@
 #!/usr/bin/env bash
 # Run commands on the Scaleway dev VM, against an up-to-date copy of this working tree.
 #
+#   tools/dev up                power the VM on and wait for SSH ("already up" if it is)
+#   tools/dev down [--force]    power it off and wait until it is (only its volume and IP bill)
+#   tools/dev state             print its state and address
 #   tools/dev run '<command>'   sync the tree to the VM, then run <command> from the repo root
 #   tools/dev run-scw '<cmd>'   same, with the Scaleway credentials from .env exported for that command only
 #   tools/dev run-agent '<cmd>' same as run, with an SSH agent holding only the prod key forwarded,
 #                               for commands that ssh from the dev VM to prod (deploy, nixos-anywhere)
 #   tools/dev pull <path>...    copy files generated on the VM (e.g. uv.lock) back to the laptop
 #   tools/dev ssh               interactive shell on the VM
+#   tools/dev pin               pin the VM's host key, checked against the one Scaleway reports
 #
-# Secrets (.env, .secrets/) are never copied to the VM.
+# run, run-scw, run-agent, pull and ssh power the VM on first if it is off. Run `tools/dev down`
+# when done. Power actions use .secrets/scw-dev.env (the agenda-dev-ops key: read, start and stop
+# the servers of project agenda-dev, nothing else). Secrets (.env, .secrets/) are never copied
+# to the VM.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-host="root@$(cat "$root/.secrets/dev-ip")"
+ip=$(cat "$root/.secrets/dev-ip")
+host="root@$ip"
+server_id=$(cat "$root/.secrets/dev-server-id")
+api_env=${AGENDA_DEV_SCW_ENV:-$root/.secrets/scw-dev.env}
 remote_dir=/srv/agenda
 # ssh splits UserKnownHostsFile on whitespace (it takes a list), hence the inner quotes.
-ssh_opts=(-i "$root/.secrets/agenda_ed25519" -o "UserKnownHostsFile=\"$root/.secrets/known_hosts\"" -o BatchMode=yes -o ConnectTimeout=15)
+# The host key is pinned under the name agenda-dev (`tools/dev pin`), whatever the address.
+ssh_opts=(-i "$root/.secrets/agenda_ed25519" -o "UserKnownHostsFile=\"$root/.secrets/known_hosts\"" -o HostKeyAlias=agenda-dev -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15)
 # rsync splits -e on whitespace. It honours quotes but not backslashes (2.6.9 on macOS),
 # so printf %q won't do: single-quote each word, for a repo path with spaces.
 rsync_ssh=ssh
@@ -74,9 +85,202 @@ scw_exports() {
   done <"$1"
 }
 
+# The value of NAME in an env file (same parsing as scw_exports), or failure.
+env_value() {
+  local line value
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?([A-Z0-9_]+)=(.*)$ ]] || continue
+    [ "${BASH_REMATCH[2]}" = "$2" ] || continue
+    value=${BASH_REMATCH[3]}
+    if [[ $value =~ ^\"(.*)\"$ || $value =~ ^\'(.*)\'$ ]]; then
+      value=${BASH_REMATCH[1]}
+    fi
+    printf '%s' "$value"
+    return 0
+  done <"$1"
+  return 1
+}
+
+# --- Power: the Instance API with the agenda-dev-ops key ------------------------------------
+
+zone=nl-ams-1
+api_body=
+
+# api METHOD PATH [JSON]: one call to the Instance API, the response body in $api_body. The
+# token reaches curl as a config line on stdin (printf is a builtin): never in a process list.
+api() {
+  local token out code args
+  if [ ! -r "$api_env" ] || ! token=$(env_value "$api_env" SCW_SECRET_KEY) || [ -z "$token" ]; then
+    echo "tools/dev: no SCW_SECRET_KEY in $api_env (docs/ops/RUNBOOK.md, \"The dev VM\")" >&2
+    exit 1
+  fi
+  zone=$(env_value "$api_env" SCW_DEFAULT_ZONE) || zone=nl-ams-1
+  args=(-sS --max-time 30 -X "$1" -w '\n%{http_code}' -H 'Content-Type: application/json')
+  if [ -n "${3:-}" ]; then args+=(--data "$3"); fi
+  if ! out=$(printf 'header = "X-Auth-Token: %s"\n' "$token" |
+    curl --config - "${args[@]}" "https://api.scaleway.com/instance/v1/zones/$zone$2"); then
+    echo "tools/dev: the Scaleway API can't be reached" >&2
+    exit 1
+  fi
+  code=${out##*$'\n'}
+  api_body=${out%$'\n'*}
+  case "$code" in
+    2??) ;;
+    *) echo "tools/dev: Scaleway API $1 $2: HTTP $code: $api_body" >&2; exit 1 ;;
+  esac
+}
+
+# Prints a Python expression over the last response, parsed as `j`.
+json() {
+  python3 -I -c 'import json, sys; j = json.loads(sys.stdin.read()); print(eval(sys.argv[1]))' "$1" <<<"$api_body"
+}
+
+# Sets $state (running, stopped, stopped in place, starting, stopping, locked) and $ip. A new
+# address (the IP is flexible, so only after a rebuild) goes to .secrets/dev-ip.
+refresh() {
+  local new_ip
+  api GET "/servers/$server_id"
+  state=$(json 'j["server"]["state"]')
+  new_ip=$(json '(j["server"].get("public_ip") or {}).get("address") or ""')
+  if [ -n "$new_ip" ] && [ "$new_ip" != "$ip" ]; then
+    ip=$new_ip
+    host="root@$ip"
+    printf '%s\n' "$ip" >"$root/.secrets/dev-ip"
+  fi
+}
+
+wait_state() {
+  local deadline=$((SECONDS + 600))
+  while :; do
+    refresh
+    [ "$state" = "$1" ] && return 0
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "tools/dev: agenda-dev is still '$state' after 10 min (wanted '$1')" >&2
+      exit 1
+    fi
+    sleep 3
+  done
+}
+
+wait_ssh() {
+  local deadline=$((SECONDS + 300))
+  until ssh -o ConnectTimeout=5 "${ssh_opts[@]}" "$host" true 2>/dev/null; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "tools/dev: agenda-dev is running but SSH doesn't answer after 5 min:" >&2
+      ssh -o ConnectTimeout=5 "${ssh_opts[@]}" "$host" true
+      exit 1
+    fi
+    sleep 2
+  done
+}
+
+# Powers on if needed and waits for the running state. Returns 1 if it already was.
+power_on() {
+  refresh
+  case "$state" in
+    running) return 1 ;;
+    stopping)
+      echo "tools/dev: agenda-dev is stopping; waiting, then starting it" >&2
+      wait_state stopped
+      api POST "/servers/$server_id/action" '{"action":"poweron"}'
+      ;;
+    stopped | "stopped in place")
+      echo "tools/dev: starting agenda-dev (about 30 s)" >&2
+      api POST "/servers/$server_id/action" '{"action":"poweron"}'
+      ;;
+    starting) echo "tools/dev: agenda-dev is starting" >&2 ;;
+    *) echo "tools/dev: agenda-dev is '$state'; try again in a minute" >&2; exit 1 ;;
+  esac
+  wait_state running
+}
+
+# vm_up [quiet]: power on if needed, then wait for SSH. Quiet (the auto-start before run, pull…)
+# says nothing when the VM is already up.
+vm_up() {
+  local start=$SECONDS
+  if ! power_on; then
+    if [ -z "${1:-}" ]; then echo "agenda-dev: already up ($ip)"; fi
+    return 0
+  fi
+  wait_ssh
+  echo "agenda-dev: up ($ip) after $((SECONDS - start)) s" >&2
+}
+
+vm_down() {
+  local force=${1:-} busy
+  refresh
+  case "$state" in
+    stopped) echo "agenda-dev: already down"; return 0 ;;
+    stopping) ;;
+    starting | running | "stopped in place")
+      if [ "$state" = starting ]; then wait_state running; fi
+      if [ "$state" = running ] && [ "$force" != --force ]; then
+        # Something still at work (a deploy, a check, Tofu, a long job)? The brackets keep
+        # this command's own line from matching.
+        busy=$(ssh "${ssh_opts[@]}" "$host" \
+          'pgrep -a -f "[n]ix (run|build|develop|flake|copy)|[t]ofu |[p]ytest|[d]eploy-rs|[n]ixos-anywhere|[r]sync --server"' 2>/dev/null || true)
+        if [ -n "$busy" ]; then
+          printf 'tools/dev: agenda-dev is busy, not powering off (--force to anyway):\n%s\n' "$busy" >&2
+          exit 1
+        fi
+      fi
+      api POST "/servers/$server_id/action" '{"action":"poweroff"}'
+      ;;
+    *) echo "tools/dev: agenda-dev is '$state'; try again in a minute" >&2; exit 1 ;;
+  esac
+  echo "tools/dev: powering agenda-dev off" >&2
+  wait_state stopped
+  echo "agenda-dev: down (only its volume and IP bill now)"
+}
+
+# Pins the host key under the name agenda-dev: the ED25519 key the VM serves must have the
+# fingerprint Scaleway's agent published in the server's user data at boot
+# (ssh-host-fingerprints, read over the authenticated API). No trust on first use.
+pin_host_key() {
+  local want scanned got kh=$root/.secrets/known_hosts deadline=$((SECONDS + 300))
+  power_on || true
+  scanned=$(mktemp)
+  until ssh-keyscan -T 5 -t ed25519 "$ip" 2>/dev/null >"$scanned" && [ -s "$scanned" ]; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "tools/dev: $ip:22 doesn't answer" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+  api GET "/servers/$server_id/user_data/ssh-host-fingerprints"
+  want=$(awk '/\(ED25519\)$/ {print $2}' <<<"$api_body")
+  got=$(ssh-keygen -lf "$scanned" 2>/dev/null | awk '{print $2}')
+  if [ -z "$want" ] || [ "$got" != "$want" ]; then
+    rm -f "$scanned"
+    echo "tools/dev: host key mismatch: Scaleway says '${want:-nothing}', $ip serves '${got:-nothing}'. Not pinned." >&2
+    exit 1
+  fi
+  touch "$kh"
+  ssh-keygen -R agenda-dev -f "$kh" >/dev/null 2>&1 || true
+  rm -f "$kh.old"
+  awk '{print "agenda-dev", $2, $3}' "$scanned" >>"$kh"
+  rm -f "$scanned"
+  echo "agenda-dev: host key $got pinned in .secrets/known_hosts"
+}
+
 case "${1:-}" in
+  up)
+    vm_up
+    ;;
+  down)
+    vm_down "${2:-}"
+    ;;
+  state)
+    refresh
+    echo "agenda-dev: $state ($ip)"
+    ;;
+  pin)
+    pin_host_key
+    ;;
   run)
     shift
+    vm_up quiet
     sync_tree
     ssh "${ssh_opts[@]}" "$host" "$nix_env && cd $remote_dir && $*"
     ;;
@@ -87,6 +291,7 @@ case "${1:-}" in
     # sees it otherwise. The VM's own key (agenda_ed25519, used to reach the VM) is not in
     # prod's rootKeys. AGENDA_DEV_AGENT_KEY names another key, for a key rotation only.
     shift
+    vm_up quiet
     agent_key=${AGENDA_DEV_AGENT_KEY:-$root/.secrets/agenda_prod_ed25519}
     agent_dir=$(mktemp -d)
     eval "$(ssh-agent -s -a "$agent_dir/agent.sock")" >/dev/null
@@ -107,6 +312,7 @@ case "${1:-}" in
         exit 1
       fi
     done
+    vm_up quiet
     sync_tree
     printf '%s\n%s\ncd %s && %s\n' "$exports" "$nix_env" "$remote_dir" "$*" | ssh "${ssh_opts[@]}" "$host" 'bash -s'
     ;;
@@ -114,6 +320,7 @@ case "${1:-}" in
     # One file at a time over ssh, without rsync (the Mac's rsync 2.6.9 trusts the sender
     # with the file list). Paths are relative to the repo, outside .git/.
     shift
+    vm_up quiet
     for path in "$@"; do
       case "/$path/" in
         //* | */../* | */./* | */.git/*) echo "tools/dev: refusing to pull '$path'" >&2; exit 1 ;;
@@ -131,10 +338,11 @@ case "${1:-}" in
     done
     ;;
   ssh)
+    vm_up quiet
     exec ssh "${ssh_opts[@]}" -t "$host" "cd $remote_dir 2>/dev/null; exec bash -l"
     ;;
   *)
-    sed -n '2,10p' "$0" >&2
+    sed -n '2,20p' "$0" >&2
     exit 2
     ;;
 esac
