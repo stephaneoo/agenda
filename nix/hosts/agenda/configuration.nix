@@ -247,6 +247,9 @@ in
       "flakes"
     ];
     trusted-users = [ "root" ];
+    # The daemon talks to root only: no other user (agenda, postgres, caddy, the e2e's
+    # ephemeral one) can build, fetch or add to the store.
+    allowed-users = [ "root" ];
   };
   nix.gc = {
     automatic = true;
