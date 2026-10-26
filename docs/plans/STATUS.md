@@ -16,7 +16,7 @@ Each batch goes through: implement, review, implementer fixes, security review, 
 | A | 1–4: flake, checks, geo, travel matrix | **shipped**: c6e1978..fca2e01 |
 | B | 5–9: claims, projection, read layer, API, web | **shipped**: 0df1847..7b42767 |
 | C | 10–12: ingestion, admin, offline | **shipped**: 16f9f07..ed942d1 |
-| D | 13–17: infra, host, backups, deploy, runbook | implemented and live (4c8e600..11bb3bf, tag deploy-20261026T094007Z); in review |
+| D | 13–17: infra, host, backups, deploy, runbook | **shipped**: 4c8e600..322b3b0, live tag deploy-20261026T150641Z |
 
 ## Batch A verdict (2026-10-25)
 - Review: 3 majors (migration check: contract-of too permissive, unnumbered files skipped, per-operation tests missing) and 10 minors. All fixed.
@@ -55,5 +55,36 @@ Each batch goes through: implement, review, implementer fixes, security review, 
 - **Orchestrator check:** `nix run .#check` exit 0, 579 pytest, 41 JS tests (2 timezones), e2e 13 of 13 with no CSP violation, 0 migration violations, nothing secret tracked.
 - **Live data:** 222 events in 35 communes. Weekday expansion applies to 11 weekly markets. `PARSER_VERSION` is 3.
 
+## Batch D verdict (2026-10-26)
+- **Review.** One blocker: a deploy from a Mac always refused (the e2e did `cd ""` over ssh). Fixed: the e2e takes its root explicitly, and the tree goes over as a `git archive`. Majors fixed:
+  - a real restore left `archive_mode=off`;
+  - S3 egress drops (the allow-set now remembers 7 days; Scaleway publishes no ranges);
+  - the status said "all jobs ok" with a full disk, a degraded pool, failing archiving or an expiring cert;
+  - no alert on cert renewal;
+  - runbook ssh commands unusable (new `nix run .#ssh`).
+
+  Plus 9 minors (DST tiering, PITR by time, restore and deploy locks, quoting…).
+- **Security.** No high. Mediums fixed:
+  - backups wipeable from the host (`agenda-wals` versioned, 30-day noncurrent expiry, the key can't delete versions);
+  - nix-daemon open to all users (`allowed-users = root`);
+  - the remote e2e as root with an unsandboxed Chromium (DynamicUser, PrivateNetwork, Chromium sandbox on, port ownership check).
+
+  Lows fixed:
+  - prod has its own SSH key, and the old one is refused;
+  - a Scaleway security group (22/80/443, ICMP);
+  - no Postgres TCP listener;
+  - systemd sandboxing on the app units;
+  - deploy and restore share their locks.
+
+  Documented as accepted: the egress side channels, project-wide IAM, and that a restore trusts the backup's `postgresql.auto.conf`.
+- **Orchestrator check:**
+  - `origin/main` = 322b3b0. The live tag is at 203c22c; only the runbook differs since then.
+  - Pages, API and healthz give 200; `/admin/` 404 from outside.
+  - 5432, 8000, 2019 and 8765 are closed from outside.
+  - The old key gets "Permission denied (publickey)"; the new key logs in.
+  - `agenda-status show --check` passes, 0 failed units, 0 Postgres TCP listeners.
+  - No secret tracked. Last full check: 695 pytest, e2e 13/13.
+- **Not done:** whether the pgbackrest key can suspend versioning or change the lifecycle wasn't probed live (blocked as too close to the live bucket). The bucket policy grants neither.
+
 ## Open risks
-- **Darwin is unverified.** The flake's darwin outputs evaluate but have never been built on a Mac. The colleague deploys from a Mac, so `nix run .#check` and the deploy have to be built and run on a Mac before handover.
+- **Darwin is unverified.** The flake's darwin outputs evaluate but have never been built on a Mac. Deploys run from the dev VM (the laptop has no Nix), and the Mac code path (`--remote-e2e`) is exercised from there.
