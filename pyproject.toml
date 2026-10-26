@@ -11,6 +11,7 @@ dependencies = [
   "psycopg[binary]>=3.2",
   "requests>=2.32",
   "django-axes>=7.0",
+  "gunicorn>=23.0",
 ]
 
 [dependency-groups]

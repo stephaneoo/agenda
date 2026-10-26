@@ -1,0 +1,14 @@
+# sops recipients for secrets/ (plan, Task 14). Only the encrypted files are committed.
+# - operator: the laptop's age key, .secrets/age-operator.txt (never committed);
+# - agenda: the prod host, its SSH host key through ssh-to-age.
+# Adding a recipient (e.g. the colleague's laptop): add it here, then
+#   SOPS_AGE_KEY_FILE=.secrets/age-operator.txt sops updatekeys secrets/agenda.yaml
+keys:
+  - &operator age1t5w9u89qpm74f3slmq70kteg67nhlz767fh8v7ez0xq0hwuuvajsar59nh
+  - &agenda age1ryv63efr9f7xn4dn2r06qppe539egqamam82qkkrredc0as875zssh6560
+creation_rules:
+  - path_regex: ^secrets/[^/]+\.yaml$
+    key_groups:
+      - age:
+          - *operator
+          - *agenda

@@ -21,6 +21,22 @@
       inputs.uv2nix.follows = "uv2nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # The host (nix/hosts/agenda): disk layout, secrets, deploy.
+    disko = {
+      url = "github:nix-community/disko";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    deploy-rs = {
+      url = "github:serokell/deploy-rs";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -30,6 +46,9 @@
       pyproject-nix,
       uv2nix,
       pyproject-build-systems,
+      disko,
+      sops-nix,
+      deploy-rs,
       ...
     }:
     let
@@ -40,6 +59,7 @@
         "x86_64-linux"
       ];
       forAllSystems = lib.genAttrs systems;
+      site = import ./nix/hosts/agenda/site.nix;
 
       workspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./.; };
       overlay = workspace.mkPyprojectOverlay { sourcePreference = "wheel"; };
@@ -136,6 +156,27 @@
             '';
           };
           travelMatrix = import ./nix/travel-matrix.nix { inherit lib pkgs venv geoEnv; };
+          ops = import ./nix/ops.nix { inherit lib pkgs site; };
+          # The app as the host runs it (production venv, source, static files).
+          agendaApp =
+            import ./nix/app.nix {
+              inherit
+                lib
+                pkgs
+                pythonSet
+                workspace
+                geoEnv
+                ;
+              root = ./.;
+            }
+            // {
+              inherit geoEnv;
+            };
+          # The status report and recorder (agenda_site/statusfile.py, no Django).
+          agendaStatus = pkgs.writeShellScriptBin "agenda-status" ''
+            export PYTHONTZPATH=${pkgs.tzdata}/share/zoneinfo
+            exec ${pkgs.python312}/bin/python3 -I ${./agenda_site/statusfile.py} "$@"
+          '';
           # JS unit tests (tests/js) run on node's own test runner; IndexedDB is faked with
           # fake-indexeddb, pinned here (Apache-2.0, no dependencies).
           nodejs = pkgs.nodejs;
@@ -158,15 +199,53 @@
             travelMatrix
             nodejs
             fakeIndexeddb
+            agendaApp
+            agendaStatus
+            ops
             ;
         }
       );
+
+      # The prod host. Evaluates on any system (the host-eval check); builds on x86_64-linux,
+      # on the host itself when deploying from a Mac.
+      hostSystem = "x86_64-linux";
+      agendaHost = nixpkgs.lib.nixosSystem {
+        system = hostSystem;
+        specialArgs = {
+          inherit site;
+          inherit (perSystem.${hostSystem}) agendaApp agendaStatus;
+        };
+        modules = [
+          disko.nixosModules.disko
+          sops-nix.nixosModules.sops
+          ./nix/hosts/agenda/configuration.nix
+        ];
+      };
     in
     {
       packages = forAllSystems (system: {
         venv = perSystem.${system}.venv;
         postgis-fixture = perSystem.${system}.postgisFixture;
+        deploy-rs = deploy-rs.packages.${system}.default;
       });
+
+      nixosConfigurations.agenda = agendaHost;
+
+      # deploy-rs: activation with magic rollback (the host must confirm over a new SSH
+      # connection, or it reverts). Built on the host (remoteBuild). `nix run .#deploy`
+      # (tools/deploy.py) runs the checks first and /healthz after.
+      deploy.nodes.agenda = {
+        hostname = site.address;
+        sshUser = "root";
+        remoteBuild = true;
+        magicRollback = true;
+        autoRollback = true;
+        confirmTimeout = 60;
+        profiles.system = {
+          user = "root";
+          path = deploy-rs.lib.${hostSystem}.activate.nixos agendaHost;
+        };
+      };
 
       apps = forAllSystems (
         system:
@@ -189,6 +268,14 @@
           type = "app";
           program = "${perSystem.${system}.travelMatrix}/bin/travel-matrix";
         };
+        status = {
+          type = "app";
+          program = "${perSystem.${system}.ops.status}/bin/agenda-status-remote";
+        };
+        admin-tunnel = {
+          type = "app";
+          program = "${perSystem.${system}.ops.admin-tunnel}/bin/agenda-admin-tunnel";
+        };
         }
       );
 
@@ -196,8 +283,10 @@
         system:
         import ./nix/checks.nix {
           inherit lib self;
+          host = agendaHost;
           inherit (perSystem.${system})
             pkgs
+            agendaApp
             venv
             postgisFixture
             geoEnv

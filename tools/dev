@@ -3,6 +3,8 @@
 #
 #   tools/dev run '<command>'   sync the tree to the VM, then run <command> from the repo root
 #   tools/dev run-scw '<cmd>'   same, with the Scaleway credentials from .env exported for that command only
+#   tools/dev run-agent '<cmd>' same as run, with an SSH agent holding only the VM key forwarded,
+#                               for commands that ssh from the dev VM onward (nixos-anywhere, deploy)
 #   tools/dev pull <path>...    copy files generated on the VM (e.g. uv.lock) back to the laptop
 #   tools/dev ssh               interactive shell on the VM
 #
@@ -77,6 +79,18 @@ case "${1:-}" in
     shift
     sync_tree
     ssh "${ssh_opts[@]}" "$host" "$nix_env && cd $remote_dir && $*"
+    ;;
+  run-agent)
+    # Like run, with agent forwarding. A throwaway agent, not the user's: it holds the VM key
+    # only and dies with this command, so the dev VM can use the key while it runs and never
+    # sees the private key itself.
+    shift
+    agent_dir=$(mktemp -d)
+    eval "$(ssh-agent -s -a "$agent_dir/agent.sock")" >/dev/null
+    trap 'ssh-agent -k >/dev/null 2>&1; rm -rf "$agent_dir"' EXIT
+    ssh-add -q "$root/.secrets/agenda_ed25519"
+    sync_tree
+    ssh "${ssh_opts[@]}" -A "$host" "$nix_env && cd $remote_dir && $*"
     ;;
   run-scw)
     # Like run, with the SCW_* variables from .env exported for this one command.

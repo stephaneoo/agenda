@@ -6,6 +6,8 @@
 {
   lib,
   self,
+  host,
+  agendaApp,
   pkgs,
   venv,
   postgisFixture,
@@ -105,8 +107,39 @@ in
       touch $out
     '';
 
+  # The host configuration evaluates (any system: evaluation only, nothing is built, so this
+  # runs on a Mac too).
+  host-eval = pkgs.writeText "agenda-host-eval" (
+    builtins.unsafeDiscardStringContext host.config.system.build.toplevel.drvPath
+  );
+
   # Every package in uv.lock comes from files.pythonhosted.org.
   lock-sources = withSource "agenda-lock-sources" ''
     python -m tools.check_lock_sources uv.lock
   '';
+}
+# Linux only: builds the whole system. Its closure carries no browser (the e2e's Chromium and
+# Playwright), and the app source has no tools/, tests/ or docs/.
+// lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == host.pkgs.stdenv.hostPlatform.system) {
+  host-closure =
+    pkgs.runCommand "agenda-host-closure"
+      {
+        exportReferencesGraph = [
+          "graph"
+          host.config.system.build.toplevel
+        ];
+      }
+      ''
+        if grep -iE '^/nix/store/[^/]*(chromium|playwright)' graph; then
+          echo "the system closure contains a browser" >&2
+          exit 1
+        fi
+        for d in tools tests docs infra; do
+          if [ -e ${agendaApp.src}/$d ]; then
+            echo "the app source contains $d/" >&2
+            exit 1
+          fi
+        done
+        touch $out
+      '';
 }
