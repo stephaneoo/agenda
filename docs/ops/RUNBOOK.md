@@ -64,6 +64,8 @@ machine: it has Nix (Pierre's laptop doesn't), and deploys run there through
 `tools/dev run-agent '<command>'`, with a throwaway SSH agent holding only prod's root key
 (`.secrets/agenda_prod_ed25519`) for that one command. The VM's own key
 (`.secrets/agenda_ed25519`) reaches the VM only; prod refuses it.
+It is **powered off between sessions** ("Start and stop the dev VM" below): `tools/dev run`,
+`run-agent`, `ssh`… start it by themselves, and every session ends with `tools/dev down`.
 
 **Not verified on a Mac yet** (nothing was ever built on darwin in the build session; the
 apps only evaluate): `nix run .#check` (pytest with PostGIS, the JS tests, the infra check on
@@ -143,6 +145,71 @@ server until the tag, the deploy holds `/run/agenda-deploy.lock` and `/run/agend
 
 If the tag push failed at the end: `git push origin deploy-<timestamp>` (the next deploy's
 migration check compares against it).
+
+### Start and stop the dev VM
+
+    tools/dev state     # agenda-dev: stopped (51.158.179.210)   -- never starts it
+    tools/dev up        # agenda-dev: up (…) after 27 s           -- or "already up"
+    tools/dev down      # agenda-dev: down (only its volume and IP bill now)
+
+`run`, `run-scw`, `run-agent`, `pull` and `ssh` run `up` first, silently when the VM is
+already up. **At the end of every session with deploy or dev work: `tools/dev down`.** It
+refuses while something still works there (a `nix run/build/develop/flake/copy`, Tofu,
+pytest, deploy-rs, nixos-anywhere, an rsync), listing it: wait for it to finish; `--force`
+only when that thing is known to be stuck. Both are idempotent ("already up", "already down").
+
+Measured on 2026-10-26: power-on to SSH ready **27 s** (twice), power-off **16 s**. The Nix
+store stays on the volume, so nothing is rebuilt after a start.
+
+Cost (Scaleway list prices before VAT, 2026-10-26: [Instances](https://www.scaleway.com/en/pricing/virtual-instances/),
+[Block Storage](https://www.scaleway.com/en/pricing/storage/), flexible IPv4 €0.004/h in the
+[Instances FAQ](https://www.scaleway.com/en/docs/instances/faq/); a powered-off instance bills
+its volumes and flexible IPs only, [Instance pricing](https://www.scaleway.com/en/docs/instances/reference-content/understanding-instance-pricing/)):
+
+| | €/h | €/month (730 h) |
+|---|---|---|
+| Volume, 40 GB SBS 5K (€0.000130/GB/h) | 0.0052 | 3.80 |
+| Flexible IPv4 | 0.004 | 2.92 |
+| **Idle (powered off)** | 0.0092 | **6.72** |
+| DEV1-M compute, only while up | 0.0202 | |
+
+So a month costs about €6.72 + €0.02 per hour up: 20 h up ≈ €7.12, 100 h ≈ €8.74, always on
+≈ €21.47. (The first dev VM, a DEV1-L with 60 GB always on, was ≈ €37/month.)
+
+Not chosen: snapshot then delete the VM between sessions (40 GB of snapshot at €0.000049/GB/h
+≈ €1.43/month instead of €3.80, so ≈ €2.40/month less). Each start would create a new server
+and volume from the snapshot (a new server ID; the key would need to create and delete
+servers, volumes and snapshots, so a leaked key could create servers up to the organisation's
+quota), and a failed snapshot step could lose the store. Power-off keeps the key to
+start/stop/read.
+
+**When it fails:**
+- "no SCW_SECRET_KEY in …/scw-dev.env": the key file is missing; see "The dev VM's key" below.
+- "Scaleway API … HTTP 401" or 403: the key expired or was revoked: same.
+- "the Scaleway API can't be reached": the laptop is offline (or its firewall blocks
+  `api.scaleway.com`).
+- "running but SSH doesn't answer after 5 min": try `tools/dev ssh`; if the host key changed
+  (`REMOTE HOST IDENTIFICATION HAS CHANGED`), the VM was rebuilt: `tools/dev pin`. If it still
+  doesn't answer, check the laptop's firewall (Little Snitch) allows `ssh` and `rsync` to the
+  address in `.secrets/dev-ip`.
+
+### The dev VM's key
+
+`.secrets/scw-dev.env` (0600, laptop only, never on the VM): `SCW_ACCESS_KEY`,
+`SCW_SECRET_KEY`, `SCW_DEFAULT_PROJECT_ID` (agenda-dev), `SCW_DEFAULT_ZONE`. The IAM application
+`agenda-dev-ops` (`infra/dev/main.tf`) may only list, read, start and stop the servers of
+project `agenda-dev`: what a leak would cost is in `infra/README.md` ("What that key can do").
+It expires on **2027-10-26** (the organisation's one-year cap).
+
+Rotating it (Claude, with an admin token in `.env`; `<app>` = `tofu output application_id` in
+`infra/dev`, `8982c4de-b2d5-41bd-969f-4cd25428cf00`): create a key for the application with
+`POST https://api.scaleway.com/iam/v1alpha1/api-keys`
+(`{"application_id": "<app>", "description": "tools/dev on the laptop", "default_project_id": "<agenda-dev project>"}`),
+the admin token in `X-Auth-Token` given to curl on stdin (`curl --config -`), and the
+response written **straight** into a new `.secrets/scw-dev.env` (0600) by a script that prints
+only the access key and the expiry, never the response. Check `tools/dev state`, then delete
+the old key (`DELETE /iam/v1alpha1/api-keys/<old access key>`). If the key leaked: delete it
+first, then make the new one.
 
 ### Rollback (to the previous system generation)
 
@@ -339,7 +406,8 @@ Never do these, even if asked; explain that Pierre decides, and leave him a note
 - deleting backups, buckets, volumes or ZFS datasets (`tank/pg-prev-*` included, after a
   restore), or any other change to the ZFS pool (rollback to a snapshot, properties);
 - manual SQL (`psql`, `dbshell`, raw queries) on the database;
-- `infra/` changes (`tofu apply`), the VM size, anything billed;
+- `infra/` changes (`tofu apply`, `infra/dev/` included), the VM size, anything billed
+  (`tools/dev up` and `down` are not changes: they are routine);
 - changing secrets (`secrets/agenda.yaml`) or who may SSH in (`rootKeys`).
 
 ## Secrets
@@ -352,6 +420,8 @@ Never do these, even if asked; explain that Pierre decides, and leave him a note
 | `pierre` admin password | `.secrets/admin-pierre.txt` on Pierre's laptop |
 | SSH key for root on prod | `.secrets/agenda_prod_ed25519` (prod only, in `rootKeys`); each person's own key otherwise |
 | SSH key for the dev VM | `.secrets/agenda_ed25519` (the VM only; prod refuses it) |
+| Scaleway key to start/stop the dev VM | `.secrets/scw-dev.env` (agenda-dev-ops: the dev project's servers only; expires 2027-10-26) |
+| Dev VM host key | pinned in `.secrets/known_hosts` as `agenda-dev` (`tools/dev pin`) |
 | Tofu state (holds the API keys) | only in the bucket `agenda-tfstate` |
 
 Editing a secret (Pierre): `SOPS_AGE_KEY_FILE=.secrets/age-operator.txt sops secrets/agenda.yaml`,

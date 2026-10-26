@@ -86,5 +86,14 @@ Each batch goes through: implement, review, implementer fixes, security review, 
   - No secret tracked. Last full check: 695 pytest, e2e 13/13.
 - **Not done:** whether the pgbackrest key can suspend versioning or change the lifecycle wasn't probed live (blocked as too close to the live bucket). The bucket policy grants neither.
 
+## Dev VM on demand (2026-10-26)
+- **Own project.** The dev VM moved to a new Scaleway project `agenda-dev` (4b0f1944-…), in OpenTofu (`infra/dev/`, state `agenda/dev.tfstate`, apart from prod's). New VM `agenda-dev` 0eedeb3b-8eb5-4ac0-8678-a3140cdc37eb: **DEV1-M** (down from DEV1-L), 40 GB SBS root, flexible IPv4 51.158.179.210, security group 22/ICMP, Determinate Nix 3.24.0 from cloud-init. Its host key was pinned against the fingerprints Scaleway's agent publishes in the server's user data (read over the API), not on first use (`tools/dev pin` does it again after a rebuild).
+- **DEV1-M is enough.** `nix run .#check` passed there: cold store 17 min 36 s, warm 6 min 14 s; 695 pytest, e2e 13/13, 0 migration violations; lowest free memory 1.2 GB of 4 GB. `run-agent` reaches prod (`agenda-status show`). Not deployed.
+- **Powered off between sessions.** `tools/dev up/down/state` with the key `agenda-dev-ops` (`.secrets/scw-dev.env`: list, read, start, stop the servers of `agenda-dev` only; expires 2027-10-26). Power-on to SSH 27 s, power-off 16 s. Idle €6.72/month (volume €3.80, IP €2.92) plus €0.0202 per hour up. Snapshot-and-delete would save ≈ €2.40/month but needs a key that can create servers: not done.
+- **Deleted:** the old dev VM ef527daa-4a49-46dc-94a2-fb65f51f26a2 (project `agenda`), its 60 GB volume 45b66e3a-a744-468a-91f5-46ed59c8ef00 and its dynamic IP 51.15.84.31.
+- **Waits for Pierre:** the laptop's Little Snitch has not yet allowed `ssh`/`rsync` to 51.158.179.210 (connections time out; the verification went through the old VM as a jump host, before its deletion). Allow it once (the address is stable), then `tools/dev up` works.
+- `nix run nixpkgs#…` (the flakehub registry) times out from the new VM; the repo's flake only uses GitHub inputs, so nothing depends on it.
+
 ## Open risks
 - **Darwin is unverified.** The flake's darwin outputs evaluate but have never been built on a Mac. Deploys run from the dev VM (the laptop has no Nix), and the Mac code path (`--remote-e2e`) is exercised from there.
+- **The dev VM's reach from the laptop** depends on Little Snitch allowing its address (above).

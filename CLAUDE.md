@@ -1,5 +1,10 @@
 **At the start of every session, ask Pierre whether he wants the server status (sync,
-backups, restore test, disk). If he says yes, run `nix run .#status` and summarise it.**
+backups, restore test, disk). If he says yes, run `nix run .#status` and summarise it. Also
+tell him whether the dev VM is up: `tools/dev state` (it never starts the VM).**
+
+**When a session is done with deploy or dev work on the dev VM, run `tools/dev down`.** It
+bills by the hour while up (≈ €0.02/h); `tools/dev run`, `run-agent`, `ssh`… start it again by
+themselves (about 30 s).
 
 # Agenda
 
@@ -74,6 +79,13 @@ generated files back with `tools/dev pull <path>`. The sync sends what `git ls-f
 deploy machine, not a temporary one. `tools/dev run-agent '<cmd>'` forwards a throwaway agent
 holding only prod's root key (`.secrets/agenda_prod_ed25519`) for commands that SSH on to prod
 (the deploy); the VM's own key (`.secrets/agenda_ed25519`) is not accepted by prod.
+
+The dev VM is powered off between sessions. `tools/dev up` / `down` / `state` start, stop and
+show it (`run`, `run-scw`, `run-agent`, `pull` and `ssh` start it when off), with the
+`agenda-dev-ops` key in `.secrets/scw-dev.env`: start, stop and read the servers of project
+`agenda-dev`, nothing else (not `.env`'s admin token). It lives in its own Scaleway project and
+OpenTofu state (`infra/dev/`, `infra/README.md`), apart from prod's. `tools/dev down` refuses
+while a deploy, check, Tofu or rsync runs there (`--force` to anyway).
 
 ## Operations
 
