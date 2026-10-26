@@ -127,6 +127,12 @@ in
     networkConfig.DHCP = "ipv4";
   };
   services.resolved.enable = true;
+  # No name resolution on the local link: nothing here needs it, and LLMNR/mDNS answer or
+  # trust whoever else is on the segment.
+  services.resolved.settings.Resolve = {
+    LLMNR = "no";
+    MulticastDNS = "no";
+  };
 
   # Inbound: TCP 22, 80 and 443 only (openssh opens 22).
   networking.nftables.enable = true;

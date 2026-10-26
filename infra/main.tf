@@ -4,9 +4,9 @@
 #   20 GB root volume, a 50 GB block volume for the ZFS pool `tank`, a flexible IPv4.
 # - fr-par: the buckets agenda-wals (pgBackRest) and agenda-assets (django-storages, empty
 #   in v1), offsite from the VM. The state bucket agenda-tfstate is created by hand (README).
-# - IAM: the applications `pgbackrest` and `django-storage`, each with one API key. They get
-#   no IAM policy at all: the only thing they may touch is their own bucket, granted by that
-#   bucket's policy.
+# - IAM: the applications `pgbackrest` and `django-storage`, each with one API key, an IAM
+#   policy for Object Storage in the project, narrowed to their own bucket by its policy.
+# - A security group for the VM: inbound 22, 80, 443 and ICMP only.
 
 terraform {
   required_version = ">= 1.8"
@@ -48,13 +48,41 @@ resource "scaleway_block_volume" "zfs" {
   }
 }
 
+# In front of the host's own firewall (nftables, the same ports): inbound SSH, HTTP, HTTPS and
+# ICMP only, the rest dropped; replies to outbound traffic come back (stateful). Prod only:
+# the dev VM keeps the zone's default group.
+resource "scaleway_instance_security_group" "prod" {
+  name                    = "agenda-prod"
+  description             = "agenda prod: inbound 22, 80, 443 and ICMP only"
+  zone                    = var.vm_zone
+  stateful                = true
+  inbound_default_policy  = "drop"
+  outbound_default_policy = "accept"
+  tags                    = ["agenda", "prod"]
+
+  dynamic "inbound_rule" {
+    for_each = [22, 80, 443]
+    content {
+      action   = "accept"
+      protocol = "TCP"
+      port     = inbound_rule.value
+    }
+  }
+
+  inbound_rule {
+    action   = "accept"
+    protocol = "ICMP"
+  }
+}
+
 resource "scaleway_instance_server" "prod" {
-  name  = "agenda-prod"
-  zone  = var.vm_zone
-  type  = "DEV1-M"
-  image = "debian_bookworm"
-  ip_id = scaleway_instance_ip.prod.id
-  tags  = ["agenda", "prod"]
+  name              = "agenda-prod"
+  zone              = var.vm_zone
+  type              = "DEV1-M"
+  image             = "debian_bookworm"
+  ip_id             = scaleway_instance_ip.prod.id
+  security_group_id = scaleway_instance_security_group.prod.id
+  tags              = ["agenda", "prod"]
 
   root_volume {
     size_in_gb            = 20
