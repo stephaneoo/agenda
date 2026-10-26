@@ -171,3 +171,9 @@ def test_no_extra_rollback_when_deploy_rs_already_rolled_back(repo) -> None:
     stub = Stub({"deploy-rs": (1, "magic rollback")})
     assert run(repo, stub) == 1
     assert not stub.called("switch-to-configuration") and not stub.called("healthz")
+
+
+def test_command_output_keeps_stderr_apart() -> None:
+    """ssh warnings go to stderr; the answer parsed (healthz, the previous generation) is stdout."""
+    res = deploy._subprocess(["sh", "-c", "echo 'ssh: a warning' >&2; echo '{\"status\": \"ok\", \"debug\": false}'"])
+    assert res.code == 0 and deploy.healthy(res.out) and "warning" not in res.out

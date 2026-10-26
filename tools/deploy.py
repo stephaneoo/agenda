@@ -211,13 +211,15 @@ def _refused(log: Callable[[str], None]) -> int:
 
 
 def _subprocess(cmd: list[str]) -> Result:
-    # Output streams to the terminal as it comes (the checks take minutes) and is kept.
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    """Run `cmd`. Result.out is its stdout only (what gets parsed: /healthz, the previous
+    generation, store paths); stderr (ssh warnings, nix progress) goes to the terminal."""
+    quiet = any(q in " ".join(cmd) for q in ("path-info", "readlink", "flake archive"))
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
     out = []
     assert proc.stdout is not None
     for line in proc.stdout:
         out.append(line)
-        if not any(q in " ".join(cmd) for q in ("path-info", "readlink", "flake archive")):
+        if not quiet:
             sys.stdout.write(line)
     return Result(proc.wait(), "".join(out))
 
