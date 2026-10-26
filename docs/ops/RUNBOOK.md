@@ -116,6 +116,14 @@ Every Claude session starts by offering this report (see `CLAUDE.md`).
 
     nix run .#deploy
 
+From the laptop without Nix, the deploy runs on the dev VM, in a fresh clone of a local mirror
+of GitHub's `main` (the VM can't push to GitHub), with `--remote-e2e` (the Mac's path: the
+e2e on the server):
+
+    git push origin main
+    tools/dev run-agent 'git push -q /srv/origin-mirror.git main && git push -q /srv/origin-mirror.git --tags && rm -rf /srv/deploy && git clone -q /srv/origin-mirror.git /srv/deploy && cd /srv/deploy && nix run .#deploy -- --remote-e2e'
+    git tag deploy-<timestamp> <commit> && git push origin deploy-<timestamp>   # the tag it printed
+
 Success: it ends with `Deployed <commit> as deploy-<timestamp>.` and the tag is on origin.
 It refuses (and changes nothing) when:
 - the tree has uncommitted changes, or `main` isn't `origin/main`: commit and push (or pull)
