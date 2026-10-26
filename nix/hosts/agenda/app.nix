@@ -39,15 +39,10 @@ let
 
   credential = "django-secret-key:${config.sops.secrets.django-secret-key.path}";
 
-  # What every app unit shares: the user, the state directory, the key, and a sandbox.
-  common = {
-    User = "agenda";
-    Group = "agenda";
-    StateDirectory = "agenda";
-    StateDirectoryMode = "0750";
-    WorkingDirectory = "${src}";
-    LoadCredential = [ credential ];
-    UMask = "0027";
+  # The sandbox of every app process: the units below and `agenda-manage`'s transient ones.
+  # None of them binds a port (gunicorn gets its sockets from systemd), none needs a
+  # capability, a namespace, or any system call outside @system-service.
+  sandbox = {
     NoNewPrivileges = true;
     PrivateTmp = true;
     PrivateDevices = true;
@@ -55,15 +50,52 @@ let
     ProtectHome = true;
     ProtectKernelTunables = true;
     ProtectKernelModules = true;
+    ProtectKernelLogs = true;
     ProtectControlGroups = true;
+    ProtectClock = true;
+    ProtectProc = "invisible";
+    ProcSubset = "pid";
+    RestrictNamespaces = true;
     RestrictSUIDSGID = true;
     LockPersonality = true;
+    CapabilityBoundingSet = "";
     RestrictAddressFamilies = [
       "AF_UNIX"
       "AF_INET"
       "AF_INET6"
     ];
+    SocketBindDeny = "any";
     SystemCallArchitectures = "native";
+    SystemCallFilter = "@system-service";
+    SystemCallErrorNumber = "EPERM";
+  };
+
+  # As `systemd-run -p` arguments.
+  sandboxProps = lib.concatStringsSep " " (
+    lib.mapAttrsToList (
+      k: v:
+      let
+        value =
+          if builtins.isBool v then
+            (if v then "yes" else "no")
+          else if builtins.isList v then
+            lib.concatStringsSep " " v
+          else
+            toString v;
+      in
+      "-p ${lib.escapeShellArg "${k}=${value}"}"
+    ) sandbox
+  );
+
+  # What every app unit shares: the user, the state directory, the key, and the sandbox.
+  common = sandbox // {
+    User = "agenda";
+    Group = "agenda";
+    StateDirectory = "agenda";
+    StateDirectoryMode = "0750";
+    WorkingDirectory = "${src}";
+    LoadCredential = [ credential ];
+    UMask = "0027";
   };
 
   appUnit = {
@@ -107,6 +139,8 @@ let
       -p WorkingDirectory=${src} \
       -p LoadCredential=${credential} \
       -p After=postgresql.service \
+      -p UMask=0027 \
+      ${sandboxProps} \
       ${lib.concatStringsSep " " (lib.mapAttrsToList (k: v: "--setenv=${k}=${lib.escapeShellArg v}") env)} \
       "''${db[@]}" \
       ${python} ${src}/manage.py "$@"
