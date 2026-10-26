@@ -1,8 +1,9 @@
 """Sanity checks of a restored database (spec, Restore step 2; tools/restore.py runs it
 against the temporary instance before anything is swapped):
 
-- the migrations match the deployed code: none of its migrations unapplied, and no applied
-  migration it doesn't know;
+- no applied migration the deployed code doesn't know (a backup newer than the code). Its
+  migrations not applied yet are only a note: a backup older than the last deploy lacks them,
+  and agenda-migrate applies them when the app starts (expand-only between deploys);
 - the canonical tables (and the communes) are non-empty;
 - the latest claim is no newer than the target (now, without --target), give or take the
   5 minutes a claim's seen_at may be ahead.
@@ -49,7 +50,8 @@ class Command(BaseCommand):
         executor = MigrationExecutor(connection)
         unapplied = executor.migration_plan(executor.loader.graph.leaf_nodes())
         if unapplied:
-            problems.append(f"{len(unapplied)} migration(s) of the deployed code not applied")
+            self.stdout.write(f"note: {len(unapplied)} migration(s) of the deployed code not applied yet; "
+                              "agenda-migrate applies them when the app starts")
         unknown = sorted(set(executor.loader.applied_migrations) - set(executor.loader.disk_migrations))
         if unknown:
             problems.append("applied migrations the deployed code doesn't have: "
@@ -68,4 +70,4 @@ class Command(BaseCommand):
         if problems:
             raise CommandError("restore sanity checks failed: " + "; ".join(problems) + f" ({summary})")
         self.stdout.write(f"sanity checks passed: {summary}, latest claim {latest.isoformat()}, "
-                          f"migrations match the deployed code")
+                          f"no migration unknown to the deployed code")

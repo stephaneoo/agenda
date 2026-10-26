@@ -98,6 +98,10 @@ def parse_args(argv: list[str]) -> Args:
     return Args(a.target_time, a.set, a.test_only)
 
 
+def _exists(dataset: str) -> str:
+    return f"zfs list -H {dataset} >/dev/null 2>&1"
+
+
 def plan(args: Args, *, stamp: str) -> list[Step]:
     """The steps, as shell commands run as root on the host. `stamp` names the previous
     dataset (UTC, YYYYMMDDTHHMMSSZ)."""
@@ -112,7 +116,6 @@ def plan(args: Args, *, stamp: str) -> list[Step]:
         f"port = {PORT}",
         "listen_addresses = ''",
         f"unix_socket_directories = '{SOCKET}'",
-        "archive_mode = off",
         "shared_buffers = 128MB",
         f"hba_file = '{SCRATCH_DIR}/pg_hba.conf'",
         f"ident_file = '{SCRATCH_DIR}/pg_ident.conf'",
@@ -132,14 +135,16 @@ def plan(args: Args, *, stamp: str) -> list[Step]:
              f"install -d -o postgres -g postgres -m 0700 {SCRATCH_DATA} && "
              f"install -d -o postgres -g postgres -m 0755 {SOCKET}"),
         Step("restore into the scratch dataset",
-             "agenda-egress-refresh >/dev/null && " + " ".join([PG, "pgbackrest", "--stanza=agenda", f"--pg1-path={SCRATCH_DATA}", "--archive-mode=off",
+             "agenda-egress-refresh >/dev/null && " + " ".join([PG, "pgbackrest", "--stanza=agenda", f"--pg1-path={SCRATCH_DATA}",
                        *target, "restore"])),
         Step("configure the temporary instance",
              f"rm -f {SCRATCH_DATA}/postgresql.conf && printf '%s\\n' {shlex.quote(conf)} > {SCRATCH_DATA}/postgresql.conf && "
              f"echo 'local all all peer' > {SCRATCH_DIR}/pg_hba.conf && : > {SCRATCH_DIR}/pg_ident.conf && "
              f"chown postgres:postgres {SCRATCH_DATA}/postgresql.conf {SCRATCH_DIR}/pg_hba.conf {SCRATCH_DIR}/pg_ident.conf"),
         Step("start the temporary instance and wait for recovery",
-             f"{{ {PG} pg_ctl -D {SCRATCH_DATA} -l {SCRATCH_DIR}/restore.log -w -t 3600 start || "
+             # archive_mode off on the command line only: nothing about it lands in the
+             # cluster, which may become the live one.
+             f"{{ {PG} pg_ctl -D {SCRATCH_DATA} -o '-c archive_mode=off' -l {SCRATCH_DIR}/restore.log -w -t 3600 start || "
              f"{{ tail -n 20 {SCRATCH_DIR}/restore.log >&2; exit 1; }}; }}; "
              f"for i in $(seq 1 1800); do "
              f"[ \"$({PG} psql -h {SOCKET} -p {PORT} -d agenda -Atc 'select pg_is_in_recovery()')\" = f ] && exit 0; "
@@ -157,15 +162,23 @@ def plan(args: Args, *, stamp: str) -> list[Step]:
         Step("snapshot the live dataset", f"zfs snapshot {LIVE}@pre-restore-{stamp}"),
         Step("stop the app", f"systemctl stop {APP_UNITS}", undo=f"systemctl start {APP_START}"),
         Step("stop postgresql", "systemctl stop postgresql.service", undo="systemctl start postgresql.service"),
-        Step("swap datasets",
+        # Two small steps, each with an undo that checks the state first, so an undo is safe
+        # after a step that failed halfway, and twice.
+        Step("move the live dataset aside",
              f"zfs set mountpoint={prev_dir} {LIVE} && zfs rename {LIVE} {prev} && "
-             f"zfs set com.sun:auto-snapshot=false {prev} && "
+             f"zfs set com.sun:auto-snapshot=false {prev}",
+             undo=f"if ! {_exists(LIVE)} && {_exists(prev)}; then zfs rename {prev} {LIVE}; fi; "
+                  f"if {_exists(LIVE)}; then zfs set mountpoint={LIVE_DIR} {LIVE} && "
+                  f"zfs set com.sun:auto-snapshot=true {LIVE}; fi"),
+        Step("move the restored dataset in",
              f"zfs set mountpoint={LIVE_DIR} {SCRATCH} && zfs rename {SCRATCH} {LIVE} && "
-             f"zfs set com.sun:auto-snapshot=true {LIVE} && rm -f {LIVE_DIR}/16/postgresql.conf",
-             undo=f"zfs set mountpoint={SCRATCH_DIR} {LIVE} && zfs rename {LIVE} {SCRATCH} && "
-                  f"zfs set com.sun:auto-snapshot=false {SCRATCH} && "
-                  f"zfs set mountpoint={LIVE_DIR} {prev} && zfs rename {prev} {LIVE} && "
-                  f"zfs set com.sun:auto-snapshot=true {LIVE}"),
+             f"zfs set com.sun:auto-snapshot=true {LIVE} && rm -f {LIVE_DIR}/16/postgresql.conf && "
+             # Belt and braces: no archive_mode override may stay in the new live cluster.
+             f"sed -i '/^[[:space:]]*archive_mode/d' {LIVE_DIR}/16/postgresql.auto.conf",
+             undo=f"if {_exists(prev)} && {_exists(LIVE)} && ! {_exists(SCRATCH)}; then "
+                  f"zfs rename {LIVE} {SCRATCH}; fi; "
+                  f"if {_exists(SCRATCH)}; then zfs set mountpoint={SCRATCH_DIR} {SCRATCH} && "
+                  f"zfs set com.sun:auto-snapshot=false {SCRATCH}; fi"),
         Step("start postgresql", "systemctl start postgresql.service agenda-db-setup.service",
              undo="systemctl stop postgresql.service"),
         Step("start the app", f"systemctl restart agenda-migrate.service && systemctl start {APP_START}",
@@ -200,7 +213,9 @@ def execute(steps: list[Step], runner: Callable[[str], int], log: Callable[[str]
             say(f"   FAILED: {step.name}")
             ok = False
             undo_failed = False
-            for d in reversed(done):
+            # The failed step's own undo first (every undo checks the state, so this is safe
+            # after a step that stopped halfway), then the steps done, newest first.
+            for d in [step, *reversed(done)]:
                 if not d.undo:
                     continue
                 say(f"-- undo: {d.name}")
@@ -213,7 +228,7 @@ def execute(steps: list[Step], runner: Callable[[str], int], log: Callable[[str]
             break
         say(f"   ok ({time.monotonic() - t0:.1f} s)")
         done.append(step)
-        swapped = swapped or step.name == "swap datasets"
+        swapped = swapped or step.name == "move the live dataset aside"
     for step in steps:
         if step.cleanup:
             say(f"-- {step.name}")

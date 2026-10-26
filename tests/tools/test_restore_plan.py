@@ -29,16 +29,16 @@ def test_args_parse_target_set_and_test_only() -> None:
 def test_restore_plan_never_targets_live_dataset(kw) -> None:
     steps = steps_for(**kw)
     names = [s.name for s in steps]
-    swap = names.index("swap datasets") if "swap datasets" in names else len(steps)
+    swap = names.index("move the live dataset aside") if "move the live dataset aside" in names else len(steps)
     for s in steps[:swap]:
         # Before the swap, nothing writes the live dataset or its mountpoint.
         assert not re.search(r"tank/pg(?![-\w])(?!@)", s.run.replace("tank/pg@pre-restore", "")), s.name
-        assert "/var/lib/postgresql" not in s.run or s.name == "snapshot the live dataset", s.name
+        assert "/var/lib/postgresql" not in s.run, s.name
     for s in steps:
         assert "zfs destroy" not in s.run or "tank/pg-restore" in s.run, s.name
         assert not re.search(r"zfs destroy[^\n]*tank/pg(?!-restore)", s.run), s.name
     restore = next(s for s in steps if s.name == "restore into the scratch dataset")
-    assert "--pg1-path=/var/lib/pg-restore/16" in restore.run and "--archive-mode=off" in restore.run
+    assert "--pg1-path=/var/lib/pg-restore/16" in restore.run
 
 
 def test_restore_plan_test_only_stops_after_sanity() -> None:
@@ -63,12 +63,13 @@ def test_restore_plan_includes_swap_back_on_failure() -> None:
     steps = steps_for()
     names = [s.name for s in steps]
     assert names[names.index("snapshot the live dataset"):] == [
-        "snapshot the live dataset", "stop the app", "stop postgresql", "swap datasets",
-        "start postgresql", "start the app", "check /healthz", "full backup on the new timeline",
+        "snapshot the live dataset", "stop the app", "stop postgresql", "move the live dataset aside",
+        "move the restored dataset in", "start postgresql", "start the app", "check /healthz",
+        "full backup on the new timeline",
     ]
-    swap = steps[names.index("swap datasets")]
-    assert "zfs rename tank/pg tank/pg-prev-" + NOW in swap.run
-    assert "zfs rename tank/pg-prev-" + NOW + " tank/pg" in swap.undo
+    aside = steps[names.index("move the live dataset aside")]
+    assert "zfs rename tank/pg tank/pg-prev-" + NOW in aside.run
+    assert "zfs rename tank/pg-prev-" + NOW + " tank/pg" in aside.undo
 
     ran: list[str] = []
 
@@ -111,3 +112,55 @@ def test_the_backup_after_the_swap_never_swaps_back() -> None:
     assert ok  # restored and healthy; the backup failure is reported, not undone
     assert not any("tank/pg-prev-" + NOW + " tank/pg" in c for c in ran)
     assert any("backup" in l and "FAILED" in l for l in log)
+
+
+# --- Batch D review --------------------------------------------------------------------------------
+
+def test_a_real_restore_keeps_archiving_on() -> None:
+    """The restored cluster becomes the live one: archive_mode must not stay off in it. Only
+    the temporary instance runs without archiving, from its command line."""
+    steps = steps_for()
+    names = [s.name for s in steps]
+    assert not any("--archive-mode=off" in s.run for s in steps)
+    start = steps[names.index("start the temporary instance and wait for recovery")]
+    assert "-c archive_mode=off" in start.run
+    restored_in = steps[names.index("move the restored dataset in")]
+    assert "postgresql.auto.conf" in restored_in.run and "archive_mode" in restored_in.run
+    assert names.index("move the restored dataset in") < names.index("start postgresql")
+    configure = steps[names.index("configure the temporary instance")]
+    assert "archive_mode" not in configure.run
+
+
+def test_the_post_restore_backup_records_its_failure() -> None:
+    backup = steps_for()[-1]
+    # agenda-backup run records pgbackrest-backup failed in the status file when it fails.
+    assert backup.name == "full backup on the new timeline" and backup.run.startswith("agenda-backup run")
+    assert not backup.critical
+
+
+def test_every_undo_is_idempotent() -> None:
+    """Each undo checks the state it reverts, so running it twice (or after a partial step)
+    changes nothing more."""
+    for s in steps_for():
+        if s.undo and "zfs" in s.undo:
+            assert "zfs list -H" in s.undo, s.name
+
+
+@pytest.mark.parametrize("failing", ["move the live dataset aside", "move the restored dataset in"])
+def test_a_failed_swap_step_undoes_the_steps_before_it(failing) -> None:
+    steps = steps_for()
+    target = next(s for s in steps if s.name == failing)
+    ran: list[str] = []
+
+    def runner(cmd: str) -> int:
+        ran.append(cmd)
+        return 1 if cmd == target.run else 0
+
+    ok, log = execute(steps, runner)
+    assert not ok
+    names = [s.name for s in steps]
+    before = steps[: names.index(failing)]
+    cleanups = {s.run for s in steps if s.cleanup}
+    after = [c for c in ran[ran.index(target.run) + 1:] if c not in cleanups]
+    # Its own (idempotent) undo first: it may have stopped halfway.
+    assert after == [target.undo] + [s.undo for s in reversed(before) if s.undo]
