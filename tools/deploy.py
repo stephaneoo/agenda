@@ -6,7 +6,7 @@
    from `origin/main` after fetching branches and tags (preflight, pure over a Snapshot).
 2. The checks, the same as `nix run .#check`: `nix flake check`, the expand/contract migration
    lint (and the OpenAPI version check), then the offline e2e in Chromium. The e2e needs
-   Linux: from a Mac it runs on the host, from the flake source copied there.
+   Linux: from a Mac it runs on the host, from the commit unpacked there, bounded.
 3. Build the system on the host (`--store ssh-ng://`: a Mac never builds Linux), and refuse a
    closure with a browser in it.
 4. deploy-rs, with magic rollback: the host reverts by itself unless the new generation
@@ -122,18 +122,43 @@ def preflight(snap: Snapshot) -> list[str]:
     return reasons
 
 
-# On the host the e2e (Chromium, a PostgreSQL, the app) shares 4 GB with production: bounded
-# in its own unit, at low CPU priority, so the OOM killer picks it before the live database.
-E2E_LIMITS = ["MemoryMax=1200M", "MemorySwapMax=0", "CPUWeight=20", "PrivateTmp=yes", "WorkingDirectory=/"]
+# On the host the e2e (Chromium, a PostgreSQL, the app) shares 4 GB with production: in a
+# bounded scope, at low CPU priority, so the OOM killer picks it before the live database.
+E2E_LIMITS = ["MemoryMax=1200M", "MemorySwapMax=0", "CPUWeight=20"]
+
+
+E2E_DIR = "/var/lib/agenda-e2e"
+
+
+def upload_e2e_tree_command() -> str:
+    """The host side of `git archive HEAD | ssh host <this>`: unpack the commit into a fresh
+    root-only directory and print its path. A
+    tarball, not `nix flake archive`: copying the source into the host's store failed with a
+    hash mismatch between Determinate Nix and the host's Nix (2026-10-26)."""
+    return (f"umask 077 && mkdir -p {E2E_DIR} && d=$(mktemp -d {E2E_DIR}/run.XXXXXX) && "
+            f"tar -x -C \"$d\" && echo \"$d\"")
+
+
+def cleanup_e2e_command(path: str) -> str:
+    if not path.startswith(E2E_DIR + "/run.") or "/.." in path:
+        raise ValueError(f"not an e2e tree: {path!r}")
+    return f"rm -rf {shlex.quote(path)}"
 
 
 def remote_e2e_command(path: str) -> str:
-    """The shell command the host runs for the e2e from a Mac: the flake source at `path`
-    (copied with `nix flake archive`) is both what runs and the e2e's root."""
-    argv = ["systemd-run", "--quiet", "--wait", "--pipe", "--collect", "--service-type=exec"]
+    """The shell command the host runs for the e2e from a Mac: the commit unpacked at `path`
+    is both the flake that runs and the e2e's root.
+
+    A scope (`systemd-run --scope`), so its output comes straight back over SSH. The settings
+    refuse AGENDA_DEV under systemd, by INVOCATION_ID, which a scope gets too: the e2e is a
+    dev-mode harness on its own throwaway database and port, so this one command drops the
+    variable (`env -u`). Every app unit keeps it, and AGENDA_ENV=production refuses dev mode
+    there regardless."""
+    argv = ["systemd-run", "--scope", "--quiet", "--collect"]
     for prop in E2E_LIMITS:
         argv += ["-p", prop]
-    argv += ["--setenv=HOME=/tmp", f"--setenv=AGENDA_E2E_ROOT={path}", "--", "nix", "run", f"{path}#e2e"]
+    argv += ["--", "env", "-u", "INVOCATION_ID", f"AGENDA_E2E_ROOT={path}",
+             "nix", "run", f"path:{path}#e2e"]
     return " ".join(shlex.quote(a) for a in argv)
 
 
@@ -189,21 +214,21 @@ def run(repo: Path, *, runner: Runner, linux: bool, lock: Callable[[], HostLock 
     if linux:
         e2e = step("checks: offline e2e (Chromium)", ["nix", "run", ".#e2e"])
     else:
-        # The flake's source and inputs, copied to the host's store; the e2e runs there.
-        src = step("checks: copy the flake to the host for the e2e",
-                   ["env", f"NIX_SSHOPTS={' '.join(ssh_opts)}", "nix", "flake", "archive", "--json",
-                    "--to", f"ssh-ng://{host}"])
+        # The commit, unpacked on the host; the e2e runs there from it, then it goes.
+        ssh_cmd = " ".join(shlex.quote(w) for w in ["ssh", *ssh_opts, host, upload_e2e_tree_command()])
+        src = step("checks: send the commit to the host for the e2e",
+                   ["sh", "-c", f"git -C {shlex.quote(str(repo))} archive --format=tar HEAD | {ssh_cmd}"])
         if src.code != 0:
             return _refused(log)
+        tree = src.out.strip().splitlines()[-1] if src.out.strip() else ""
         try:
-            path = json.loads(src.out)["path"]
-        except (ValueError, KeyError, TypeError):
-            path = ""
-        if not path.startswith("/nix/store/"):
-            log(f"   FAILED: no store path from `nix flake archive`: {src.out.strip()[:300]!r}")
+            cleanup = cleanup_e2e_command(tree)
+        except ValueError:
+            log(f"   FAILED: no e2e directory from the host: {src.out.strip()[:300]!r}")
             return _refused(log)
         log("== checks: offline e2e (Chromium), on the host, bounded")
-        e2e = ssh(remote_e2e_command(path))
+        e2e = ssh(remote_e2e_command(tree))
+        ssh(cleanup)
         if e2e.code != 0:
             log(f"   FAILED: e2e\n{e2e.out.strip()[-2000:]}")
     if e2e.code != 0:
@@ -287,7 +312,7 @@ def _refused(log: Callable[[str], None]) -> int:
 def _subprocess(cmd: list[str]) -> Result:
     """Run `cmd`. Result.out is its stdout only (what gets parsed: /healthz, the previous
     generation, store paths); stderr (ssh warnings, nix progress) goes to the terminal."""
-    quiet = any(q in " ".join(cmd) for q in ("path-info", "readlink", "flake archive"))
+    quiet = any(q in " ".join(cmd) for q in ("path-info", "readlink", "archive --format=tar"))
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
     out = []
     assert proc.stdout is not None

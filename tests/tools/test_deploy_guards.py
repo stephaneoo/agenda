@@ -120,7 +120,7 @@ def test_refuses_when_only_the_migration_lint_fails(repo) -> None:
 
 
 def test_refuses_when_the_e2e_fails_on_the_host_from_a_mac(repo) -> None:
-    stub = Stub({"#e2e": (1, "offline banner missing")})
+    stub = Stub({"archive --format=tar": (0, "/var/lib/agenda-e2e/run.x"), "#e2e": (1, "offline banner missing")})
     assert run(repo, stub, linux=False) == 1
     assert stub.called("ssh") and not stub.called("deploy-rs")
 
@@ -180,16 +180,26 @@ def test_command_output_keeps_stderr_apart() -> None:
 
 
 def test_from_a_mac_the_e2e_runs_on_the_host_with_the_bounded_command(repo) -> None:
-    archive = json.dumps({"path": "/nix/store/abc123-source"})
-    stub = Stub({"flake archive": (0, archive)})
+    tree = "/var/lib/agenda-e2e/run.abc123"
+    stub = Stub({"archive --format=tar": (0, tree + "\n")})
     assert run(repo, stub, linux=False) == 0
+    upload = stub.calls[stub.index("archive --format=tar")]
+    assert "HEAD" in upload and deploy.upload_e2e_tree_command() in upload
     e2e = stub.calls[stub.index("#e2e")]
-    assert e2e.startswith("ssh ") and deploy.remote_e2e_command("/nix/store/abc123-source") in e2e
+    assert e2e.startswith("ssh ") and deploy.remote_e2e_command(tree) in e2e
+    assert stub.index("#e2e") < stub.index("rm -rf " + tree)  # removed afterwards
     assert not stub.called("nix run .#e2e")
 
 
-def test_from_a_mac_an_unreadable_flake_archive_refuses(repo) -> None:
-    stub = Stub({"flake archive": (0, "not json")})
+def test_from_a_mac_a_failed_e2e_still_removes_the_tree(repo) -> None:
+    tree = "/var/lib/agenda-e2e/run.abc123"
+    stub = Stub({"archive --format=tar": (0, tree), "#e2e": (1, "boom")})
+    assert run(repo, stub, linux=False) == 1
+    assert stub.called("rm -rf " + tree) and not stub.called("deploy-rs")
+
+
+def test_from_a_mac_a_bad_upload_refuses(repo) -> None:
+    stub = Stub({"archive --format=tar": (0, "not a path")})
     assert run(repo, stub, linux=False) == 1
     assert not stub.called("#e2e") and not stub.called("deploy-rs")
 
