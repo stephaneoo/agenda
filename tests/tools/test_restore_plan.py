@@ -5,6 +5,7 @@ import shlex
 
 import pytest
 
+from tools import restore
 from tools.restore import Args, execute, parse_args, plan
 
 NOW = "20261103T120000Z"
@@ -164,3 +165,64 @@ def test_a_failed_swap_step_undoes_the_steps_before_it(failing) -> None:
     after = [c for c in ran[ran.index(target.run) + 1:] if c not in cleanups]
     # Its own (idempotent) undo first: it may have stopped halfway.
     assert after == [target.undo] + [s.undo for s in reversed(before) if s.undo]
+
+
+# --- One restore at a time, never during a deploy (L6) ---------------------------------------
+
+
+def _hold(path) -> int:
+    import fcntl
+    import os
+
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return fd
+
+
+@pytest.mark.parametrize("held", [0, 1])
+def test_a_restore_is_refused_while_a_deploy_or_another_restore_holds_its_lock(tmp_path, held) -> None:
+    import os
+
+    locks = (str(tmp_path / "deploy.lock"), str(tmp_path / "restore.lock"))
+    fd = _hold(locks[held])
+    try:
+        assert restore.take_locks(locks, wait=0) is None
+    finally:
+        os.close(fd)
+    fds = restore.take_locks(locks, wait=0)
+    assert fds is not None and len(fds) == 2
+    # Held now: a deploy's flock on either file fails.
+    import fcntl
+
+    for path in locks:
+        other = os.open(path, os.O_RDWR)
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        os.close(other)
+    for f in fds:
+        os.close(f)
+
+
+def test_the_monthly_test_waits_for_the_lock(tmp_path) -> None:
+    import os
+
+    locks = (str(tmp_path / "deploy.lock"), str(tmp_path / "restore.lock"))
+    fd = _hold(locks[0])
+    slept: list[float] = []
+
+    def sleep(s: float) -> None:
+        slept.append(s)
+        if len(slept) == 2:
+            os.close(fd)  # the deploy ends
+
+    fds = restore.take_locks(locks, wait=3600, sleep=sleep)
+    assert fds is not None and len(slept) == 2
+    for f in fds:
+        os.close(f)
+
+
+def test_restore_main_exits_75_when_locked(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(restore, "take_locks", lambda **kw: None)
+    monkeypatch.setattr(restore, "execute", lambda *a, **k: pytest.fail("ran while locked"))
+    assert restore.main(["--test-only"]) == 75
+    assert "another restore or a deploy" in capsys.readouterr().err

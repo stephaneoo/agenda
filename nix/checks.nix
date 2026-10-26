@@ -27,7 +27,9 @@ let
           nativeBuildInputs = [
             venv
             pkgs.git
-          ];
+          ]
+          # flock(1), for the deploy and restore lock tests.
+          ++ lib.optional pkgs.stdenv.isLinux pkgs.util-linux;
           AGENDA_DEV = "1";
         }
       )

@@ -3,7 +3,10 @@ origin; everything that would reach the host is a stub runner."""
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -78,8 +81,11 @@ class Stub:
     """Answers each command by the first matching rule; records every command."""
 
     def __init__(self, rules: dict[str, tuple[int, str]] | None = None) -> None:
-        self.rules = {"healthz": (0, HEALTHY), "readlink": (0, "/nix/store/prev-system"),
-                      "--print-out-paths": (0, "/nix/store/new-system"), **(rules or {})}
+        # The test's own rules first: they win over the defaults (the remote e2e command
+        # also says --print-out-paths).
+        defaults = {"healthz": (0, HEALTHY), "readlink": (0, "/nix/store/prev-system"),
+                    "--print-out-paths": (0, "/nix/store/new-system")}
+        self.rules = {**(rules or {}), **{k: v for k, v in defaults.items() if k not in (rules or {})}}
         self.calls: list[str] = []
 
     def __call__(self, cmd: list[str]) -> deploy.Result:
@@ -236,3 +242,56 @@ def test_the_host_lock_is_held_across_build_activation_and_tag(repo) -> None:
 
 def test_the_lock_command_uses_flock_on_the_host() -> None:
     assert "flock -n" in deploy.LOCK_COMMAND and "/run/agenda-deploy.lock" in deploy.LOCK_COMMAND
+    assert "/run/agenda-restore.lock" in deploy.LOCK_COMMAND
+
+
+@pytest.mark.parametrize("linux", [True, False])
+def test_the_host_lock_is_taken_before_the_e2e(repo, linux) -> None:
+    """Nothing reaches the host (the commit for the e2e, the e2e itself, the build) before the
+    locks are held; the local checks may run first."""
+    stub = Stub({"archive --format=tar": (0, "/var/lib/agenda-e2e/run.x")})
+    taken: list[int] = []
+
+    def lock():
+        taken.append(len(stub.calls))
+        return deploy.LockHeld(True)
+
+    assert deploy.run(repo, runner=stub, linux=linux, sleep=lambda _: None, now=lambda: "20261026T101500Z",
+                      lock=lock) == 0
+    first_host = stub.index("archive --format=tar") if not linux else stub.index("#e2e")
+    assert taken and taken[0] <= first_host and taken[0] > stub.index("check-migrations")
+
+
+def test_a_held_lock_refuses_before_the_e2e(repo) -> None:
+    stub = Stub()
+    rc = deploy.run(repo, runner=stub, linux=False, sleep=lambda _: None, now=lambda: "20261026T101500Z",
+                    lock=lambda: deploy.LockHeld(False, "a restore is running"))
+    assert rc == 1 and not stub.called("archive --format=tar") and not stub.called("#e2e")
+
+
+flock = pytest.mark.skipif(not shutil.which("flock"), reason="flock(1) not on PATH")
+
+
+@flock
+@pytest.mark.parametrize("held", [0, 1])
+def test_the_lock_command_is_refused_while_either_lock_is_held(tmp_path, held) -> None:
+    """The real command, with flock(1): a restore's lock (tools/restore.py takes both) or
+    another deploy's makes it exit without saying `locked`."""
+    locks = (str(tmp_path / "deploy.lock"), str(tmp_path / "restore.lock"))
+    fd = os.open(locks[held], os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        res = subprocess.run(["sh", "-c", deploy.lock_command(locks)], input="", capture_output=True, text=True,
+                             timeout=10)
+    finally:
+        os.close(fd)
+    assert res.returncode != 0 and "locked" not in res.stdout
+    res = subprocess.run(["sh", "-c", deploy.lock_command(locks)], input="", capture_output=True, text=True,
+                         timeout=10)
+    assert res.stdout.strip() == "locked"  # then it waits for stdin to close
+
+
+def test_deploy_and_restore_take_the_same_locks_in_the_same_order() -> None:
+    from tools import restore
+
+    assert restore.HOST_LOCKS == deploy.HOST_LOCKS

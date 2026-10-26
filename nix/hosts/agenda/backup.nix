@@ -50,12 +50,9 @@ let
     text = ''
       export ${tz}
       export PATH="${dirOf egressRefresh}:$PATH"
-      # One restore at a time, the monthly test included (its unit runs this same command).
-      rc=0
-      flock --nonblock --conflict-exit-code 75 /run/agenda-restore.lock \
-        ${python} -I ${../../../tools/restore.py} "$@" || rc=$?
-      if [ "$rc" = 75 ]; then echo "agenda-restore: another restore is running" >&2; fi
-      exit "$rc"
+      # One restore at a time, the monthly test included (its unit runs this same command),
+      # and never during a deploy: restore.py takes both locks (HOST_LOCKS) or exits 75.
+      exec ${python} -I ${../../../tools/restore.py} "$@"
     '';
   };
 
@@ -174,7 +171,10 @@ in
   systemd.services.pgbackrest-tier-expire =
     job "pgbackrest-tier-expire" "pgBackRest: expire backups past their tier's age" "${agendaBackup}/bin/agenda-backup expire";
   systemd.timers.pgbackrest-tier-expire = timer "*-*-* 02:30 Europe/Paris";
-  systemd.services.restore-test = job "restore-test" "Restore test: the latest backup into tank/pg-restore, sanity checks" "${agendaRestore}/bin/agenda-restore --test-only";
+  systemd.services.restore-test = lib.recursiveUpdate (job "restore-test" "Restore test: the latest backup into tank/pg-restore, sanity checks" "${agendaRestore}/bin/agenda-restore --test-only") {
+    # A deploy (or a restore by hand) in progress: wait for it rather than fail.
+    environment.AGENDA_LOCK_WAIT = "3600";
+  };
   systemd.timers.restore-test = timer "*-*-02 04:00 Europe/Paris";
 
   # The stanza, once the database runs (idempotent: a no-op when it exists and matches).

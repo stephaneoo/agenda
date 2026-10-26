@@ -24,6 +24,8 @@ plan(args) is pure; execute(steps, runner) runs them through `runner` (a shell o
 from __future__ import annotations
 
 import argparse
+import fcntl
+import os
 import re
 import shlex
 import subprocess
@@ -44,6 +46,12 @@ APP_UNITS = "agenda-web.socket agenda-web.service sync-datatourisme.timer pgback
             "pgbackrest-tier-expire.timer restore-test.timer"
 APP_START = "agenda-web.socket agenda-web.service sync-datatourisme.timer pgbackrest-backup.timer " \
             "pgbackrest-tier-expire.timer restore-test.timer"
+# One restore at a time, and never during a deploy: the deploy holds the same two flocks, taken
+# in the same order (tools/deploy.py, HOST_LOCKS), from before its e2e until its tag.
+HOST_LOCKS = ("/run/agenda-deploy.lock", "/run/agenda-restore.lock")
+# Seconds to wait for them (AGENDA_LOCK_WAIT): 0 by hand, an hour for the monthly test, which
+# would rather start late than fail on a deploy.
+LOCK_WAIT_ENV = "AGENDA_LOCK_WAIT"
 LABEL = re.compile(r"^\d{8}-\d{6}F(_\d{8}-\d{6}[DI])?$")
 PG = f"runuser -u postgres --"
 HEALTHZ = (
@@ -134,6 +142,9 @@ def plan(args: Args, *, stamp: str) -> list[Step]:
              f"chown postgres:postgres {SCRATCH_DIR} && chmod 0700 {SCRATCH_DIR} && "
              f"install -d -o postgres -g postgres -m 0700 {SCRATCH_DATA} && "
              f"install -d -o postgres -g postgres -m 0755 {SOCKET}"),
+        # Accepted for v1: the restored cluster keeps the backup's postgresql.auto.conf (what
+        # ALTER SYSTEM set on the live database); only its archive_mode lines are dropped, at
+        # the swap. A restore trusts the backup.
         Step("restore into the scratch dataset",
              "agenda-egress-refresh >/dev/null && " + " ".join([PG, "pgbackrest", "--stanza=agenda", f"--pg1-path={SCRATCH_DATA}",
                        *target, "restore"])),
@@ -240,6 +251,27 @@ def execute(steps: list[Step], runner: Callable[[str], int], log: Callable[[str]
     return ok, lines
 
 
+def take_locks(paths: tuple[str, ...] = HOST_LOCKS, wait: float = 0, *,
+               sleep: Callable[[float], None] = time.sleep) -> list[int] | None:
+    """Every lock in `paths`, in order, or none (the file descriptors, held until they are
+    closed or the process exits). Retries for `wait` seconds while one is held."""
+    deadline = time.monotonic() + wait
+    while True:
+        fds: list[int] = []
+        try:
+            for path in paths:
+                fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+                fds.append(fd)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fds
+        except BlockingIOError:
+            for fd in fds:
+                os.close(fd)
+        if time.monotonic() >= deadline:
+            return None
+        sleep(5)
+
+
 def _shell(cmd: str) -> int:
     # --norc: NixOS bash reads /etc/bashrc in a shell started over SSH, which set -u trips on.
     return subprocess.run(["bash", "--norc", "--noprofile", "-euo", "pipefail", "-c", cmd]).returncode
@@ -247,6 +279,13 @@ def _shell(cmd: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        wait = float(os.environ.get(LOCK_WAIT_ENV) or 0)
+    except ValueError:
+        wait = 0
+    if take_locks(wait=wait) is None:
+        print("agenda-restore: another restore or a deploy is running", file=sys.stderr, flush=True)
+        return 75
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     t0 = time.monotonic()
     ok, _ = execute(plan(args, stamp=stamp), _shell, log=lambda l: print(l, flush=True))

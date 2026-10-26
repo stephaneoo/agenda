@@ -52,10 +52,24 @@ class Result:
 
 Runner = Callable[[list[str]], Result]
 
-# One deploy at a time on the host: an flock held by an SSH session for the build, the
-# activation, /healthz and the tag; it goes when the session's stdin closes (or the laptop
-# drops), so a crashed deploy never leaves it behind.
-LOCK_COMMAND = "exec flock -n /run/agenda-deploy.lock sh -c 'echo locked; read -r _'"
+# One deploy at a time on the host, and never during a restore: an SSH session holds both
+# the deploy's flock and the restore's (tools/restore.py takes the same two, in the same
+# order) from before the e2e reaches the host until the tag is pushed. The locks go when the
+# session's stdin closes (or the laptop drops), so a crashed deploy never leaves them behind.
+DEPLOY_LOCK = "/run/agenda-deploy.lock"
+RESTORE_LOCK = "/run/agenda-restore.lock"
+HOST_LOCKS = (DEPLOY_LOCK, RESTORE_LOCK)
+
+
+def lock_command(locks: tuple[str, ...] = HOST_LOCKS) -> str:
+    inner = "echo locked; read -r _"
+    cmd = f"sh -c {shlex.quote(inner)}"
+    for path in reversed(locks):
+        cmd = f"flock -n {shlex.quote(path)} {cmd}"
+    return "exec " + cmd
+
+
+LOCK_COMMAND = lock_command()
 
 
 @dataclass
@@ -89,7 +103,8 @@ def ssh_lock(ssh_argv: list[str]) -> HostLock | LockHeld:
     if proc.stdout.readline().strip() == "locked":
         return HostLock(proc)
     proc.wait()
-    return LockHeld(False, "another deploy holds /run/agenda-deploy.lock on the host (or SSH failed)")
+    return LockHeld(False, f"another deploy or a restore holds {DEPLOY_LOCK} or {RESTORE_LOCK} on the host "
+                           "(or SSH failed)")
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -211,6 +226,23 @@ def run(repo: Path, *, runner: Runner, linux: bool, lock: Callable[[], HostLock 
         return _refused(log)
     if step("checks: migration lint and API version", ["nix", "run", ".#check-migrations"]).code != 0:
         return _refused(log)
+    # 3-6, and the e2e from here on, under the host's locks (main() passes ssh_lock; tests
+    # pass their own): nothing reaches the host while another deploy or a restore runs.
+    held = lock() if lock else LockHeld(True)
+    if not held.acquired:
+        log(f"Deploy refused: {held.why}.")
+        return 1
+    try:
+        return _e2e_and_activate(repo, runner=runner, ssh=ssh, step=step, ssh_opts=ssh_opts, host=host,
+                                 commit=commit, linux=linux, sleep=sleep, now=now, log=log)
+    finally:
+        held.release()
+
+
+def _e2e_and_activate(repo: Path, *, runner: Runner, ssh: Callable[[str], Result],
+                      step: Callable[[str, list[str]], Result], ssh_opts: list[str], host: str,
+                      commit: str, linux: bool, sleep: Callable[[float], None], now: Callable[[], str],
+                      log: Callable[[str], None]) -> int:
     if linux:
         e2e = step("checks: offline e2e (Chromium)", ["nix", "run", ".#e2e"])
     else:
@@ -233,17 +265,8 @@ def run(repo: Path, *, runner: Runner, linux: bool, lock: Callable[[], HostLock 
             log(f"   FAILED: e2e\n{e2e.out.strip()[-2000:]}")
     if e2e.code != 0:
         return _refused(log)
-
-    # 3-6 under the host's deploy lock (main() passes ssh_lock; tests pass their own).
-    held = lock() if lock else LockHeld(True)
-    if not held.acquired:
-        log(f"Deploy refused: {held.why}.")
-        return 1
-    try:
-        return _activate(repo, runner=runner, ssh=ssh, step=step, ssh_opts=ssh_opts, host=host, commit=commit,
-                         sleep=sleep, now=now, log=log)
-    finally:
-        held.release()
+    return _activate(repo, runner=runner, ssh=ssh, step=step, ssh_opts=ssh_opts, host=host, commit=commit,
+                     sleep=sleep, now=now, log=log)
 
 
 def _activate(repo: Path, *, runner: Runner, ssh: Callable[[str], Result],
