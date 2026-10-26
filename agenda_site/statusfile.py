@@ -16,6 +16,11 @@ for the lock file. Every string written or printed is one line: no C0, C1 or bid
 
     agenda-status [--file F] show [--no-system] [--check]
     agenda-status [--file F] record <job> <ok|partial|failed> <summary...>
+    agenda-status [--file F] record-if-silent --since <epoch> <job> <outcome> <summary...>
+
+The report also checks the host (system_checks): disk over 80%, the pool not ONLINE or over
+80%, WAL archiving failing or behind, the TLS certificate expiring within 3 days. Each of
+those, like a job that is failed, partial or STALE, is listed under "needs attention".
 """
 
 from __future__ import annotations
@@ -34,7 +39,7 @@ import tempfile
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, NamedTuple
 
 OUTCOMES = ("ok", "partial", "failed")
 SUCCESS = ("ok", "partial")
@@ -55,7 +60,19 @@ EXPECTED: dict[str, timedelta] = {
     "restore-test": timedelta(days=32),
 }
 
+DISK_LIMIT = 80.0
+ARCHIVE_LAG = timedelta(minutes=15)
+CERT_MARGIN = timedelta(days=3)
+CADDY_CERTS = "/var/lib/caddy/.local/share/caddy/certificates"
+
 logger = logging.getLogger("agenda_site.status")
+
+
+class Check(NamedTuple):
+    """One line of the system part of the report, and what needs attention in it, if anything."""
+
+    line: str
+    problem: str | None
 
 
 def one_line(text: Any, limit: int = MAX_SUMMARY) -> str:
@@ -185,7 +202,7 @@ def job_rows(data: dict[str, Any], now: datetime) -> list[tuple[str, str, str, s
     return rows
 
 
-def render(data: dict[str, Any], *, now: datetime, system: list[str], file_missing: bool = False) -> str:
+def render(data: dict[str, Any], *, now: datetime, system: list[Check | str], file_missing: bool = False) -> str:
     zone = _paris()
     label = "Europe/Paris" if zone is not UTC else "UTC"
     out = [f"agenda server status, {now.astimezone(zone):%Y-%m-%d %H:%M} {label}"]
@@ -195,23 +212,109 @@ def render(data: dict[str, Any], *, now: datetime, system: list[str], file_missi
     out.append(f"  {'job':<24} {'state':<20} {'last run':<17} {'last success':<17} summary")
     for name, state, at, ok, summary, _ in rows:
         out.append(f"  {name:<24} {state:<20} {at:<17} {ok:<17} {summary}")
-    out.extend("  " + one_line(line, 200) for line in system)
-    attention = [r[0] for r in rows if r[5]]
+    checks = [c if isinstance(c, Check) else Check(c, None) for c in system]
+    out.extend("  " + one_line(c.line, 200) for c in checks)
+    attention = [r[0] for r in rows if r[5]] + [one_line(c.problem, 120) for c in checks if c.problem]
     out.append("  needs attention: " + ", ".join(attention) if attention else "  all jobs ok")
     return "\n".join(out) + "\n"
 
 
-def system_lines() -> list[str]:
-    """Disk usage of / and the PostgreSQL dataset, and the zpool's health."""
-    lines = []
+# --- Host checks ------------------------------------------------------------------------------
+
+def disk_problem(mount: str, used_percent: float) -> str | None:
+    return f"disk {mount} over {DISK_LIMIT:.0f}%" if used_percent > DISK_LIMIT else None
+
+
+def pool_problem(name: str, health: str, cap: str) -> str | None:
+    if health != "ONLINE":
+        return f"zpool {name} {health}"
+    try:
+        full = float(cap.rstrip("%")) > DISK_LIMIT
+    except ValueError:
+        full = False
+    return f"zpool {name} over {DISK_LIMIT:.0f}%" if full else None
+
+
+def _segment(wal: str | None) -> int | None:
+    """A WAL file name's position (log and segment), ignoring the timeline."""
+    if not wal or len(wal) != 24:
+        return None
+    try:
+        return int(wal[8:16], 16) * 0x100 + int(wal[16:], 16)
+    except ValueError:
+        return None
+
+
+def archiver_problem(stats: dict[str, Any], now: datetime) -> str | None:
+    """WAL archiving failing since its last success, or completed segments waiting for more
+    than ARCHIVE_LAG. An idle database (archive_timeout switches only after activity) has
+    nothing waiting, so an old last_archived_time alone is fine."""
+    archived, failed = stats.get("last_archived_time"), stats.get("last_failed_time")
+    if failed and (archived is None or failed > archived):
+        return f"WAL archiving failing since {failed.astimezone(_paris()):%Y-%m-%d %H:%M}"
+    current, last = _segment(stats.get("current_wal")), _segment(stats.get("last_archived_wal"))
+    if current is None:
+        return None
+    waiting = current - (last if last is not None else -1)
+    if waiting >= 2 and (archived is None or now - archived > ARCHIVE_LAG):
+        return f"WAL archiving behind: {waiting - 1} segment(s) waiting"
+    return None
+
+
+def cert_problem(name: str, not_after: datetime, now: datetime) -> str | None:
+    if not_after - now < CERT_MARGIN:
+        return f"TLS certificate {name} expires {not_after.astimezone(_paris()):%Y-%m-%d %H:%M}"
+    return None
+
+
+def _archiver_stats() -> dict[str, Any] | None:
+    psql = shutil.which("psql")
+    if not psql:
+        return None
+    cmd = [psql, "-XAt", "-F", "|", "-c",
+           "select pg_walfile_name(pg_current_wal_lsn()), coalesce(last_archived_wal, ''), "
+           "coalesce(extract(epoch from last_archived_time)::bigint::text, ''), "
+           "coalesce(extract(epoch from last_failed_time)::bigint::text, '') from pg_stat_archiver"]
+    if os.geteuid() == 0 and shutil.which("runuser"):
+        cmd = ["runuser", "-u", "postgres", "--", *cmd]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10, cwd="/")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    fields = res.stdout.strip().split("|")
+    if res.returncode != 0 or len(fields) != 4:
+        return None
+
+    def when(v: str) -> datetime | None:
+        return datetime.fromtimestamp(int(v), UTC) if v else None
+
+    return {"current_wal": fields[0], "last_archived_wal": fields[1] or None,
+            "last_archived_time": when(fields[2]), "last_failed_time": when(fields[3])}
+
+
+def _cert_not_after(path: Path) -> datetime | None:
+    try:
+        import ssl
+
+        info = ssl._ssl._test_decode_cert(str(path))  # type: ignore[attr-defined]
+        return datetime.fromtimestamp(ssl.cert_time_to_seconds(info["notAfter"]), UTC)
+    except Exception:
+        return None
+
+
+def system_checks(now: datetime | None = None) -> list[Check]:
+    """Disk usage of / and the PostgreSQL dataset, the zpool, WAL archiving, the certificates."""
+    now = now or datetime.now(UTC)
+    checks = []
     for mount in ("/", "/var/lib/postgresql"):
         try:
             u = shutil.disk_usage(mount)
         except OSError:
             continue
-        lines.append(f"disk {mount}: {u.used / 2**30:.1f} GiB used of {u.total / 2**30:.1f} GiB "
-                     f"({100 * u.used / u.total:.0f}%), {u.free / 2**30:.1f} GiB free")
-    zpool = shutil.which("zpool") or ("/run/current-system/sw/bin/zpool" if os.path.exists("/run/current-system/sw/bin/zpool") else None)
+        pct = 100 * u.used / u.total
+        checks.append(Check(f"disk {mount}: {u.used / 2**30:.1f} GiB used of {u.total / 2**30:.1f} GiB "
+                            f"({pct:.0f}%), {u.free / 2**30:.1f} GiB free", disk_problem(mount, pct)))
+    zpool = shutil.which("zpool")
     if zpool:
         try:
             res = subprocess.run([zpool, "list", "-H", "-o", "name,size,alloc,free,cap,health"],
@@ -219,12 +322,30 @@ def system_lines() -> list[str]:
             for row in res.stdout.splitlines():
                 f = row.split("\t")
                 if len(f) == 6:
-                    lines.append(f"zpool {f[0]}: {f[5]}, {f[2]} used of {f[1]} ({f[4]}), {f[3]} free")
+                    checks.append(Check(f"zpool {f[0]}: {f[5]}, {f[2]} used of {f[1]} ({f[4]}), {f[3]} free",
+                                        pool_problem(f[0], f[5], f[4])))
             if res.returncode != 0:
-                lines.append(f"zpool list failed: {res.stderr.strip()}")
+                checks.append(Check(f"zpool list failed: {res.stderr.strip()}", "zpool list failed"))
         except (OSError, subprocess.SubprocessError) as e:
-            lines.append(f"zpool list failed: {e}")
-    return lines
+            checks.append(Check(f"zpool list failed: {e}", "zpool list failed"))
+    if (stats := _archiver_stats()) is not None:
+        archived = stats["last_archived_time"]
+        at = f"{archived.astimezone(_paris()):%Y-%m-%d %H:%M}" if archived else "never"
+        checks.append(Check(f"WAL archiving: last {stats['last_archived_wal'] or 'none'} at {at}, "
+                            f"current {stats['current_wal']}", archiver_problem(stats, now)))
+    certs = Path(os.environ.get("AGENDA_CADDY_CERTS") or CADDY_CERTS)
+    try:
+        found = sorted(certs.glob("*/*/*.crt")) if certs.is_dir() else []
+    except OSError:
+        found = []
+    for crt in found:
+        not_after = _cert_not_after(crt)
+        if not_after is None:
+            checks.append(Check(f"certificate {crt.stem}: unreadable", f"certificate {crt.stem} unreadable"))
+            continue
+        checks.append(Check(f"certificate {crt.stem}: valid until {not_after.astimezone(_paris()):%Y-%m-%d %H:%M}",
+                            cert_problem(crt.stem, not_after, now)))
+    return checks
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -238,10 +359,23 @@ def main(argv: list[str] | None = None) -> int:
     rec.add_argument("job")
     rec.add_argument("outcome")
     rec.add_argument("summary", nargs="*")
+    # For a unit's ExecStopPost: record only if the job wrote nothing since the unit started
+    # (killed, timed out, or crashed before recording).
+    silent = sub.add_parser("record-if-silent")
+    silent.add_argument("--since", type=int, required=True, help="the unit's start, epoch seconds")
+    silent.add_argument("job")
+    silent.add_argument("outcome")
+    silent.add_argument("summary", nargs="*")
     try:
         args = parser.parse_args(argv)
     except SystemExit as e:
         return int(e.code or 0)
+    if args.command == "record-if-silent":
+        entry = read(args.file)["jobs"].get(args.job)
+        at = _when(entry.get("at"), UTC) if isinstance(entry, dict) else None
+        if at is not None and at.timestamp() >= args.since:
+            return 0
+        args.command = "record"
     if args.command == "record":
         try:
             record(args.file, args.job, args.outcome, " ".join(args.summary))
@@ -252,9 +386,10 @@ def main(argv: list[str] | None = None) -> int:
     data = read(args.file)
     now = datetime.now(UTC)
     no_system = getattr(args, "no_system", False)
-    sys.stdout.write(render(data, now=now, system=[] if no_system else system_lines(),
-                            file_missing=not Path(args.file).exists()))
-    if getattr(args, "check", False) and any(r[5] for r in job_rows(data, now)):
+    checks = [] if no_system else system_checks(now)
+    sys.stdout.write(render(data, now=now, system=checks, file_missing=not Path(args.file).exists()))
+    needs = any(r[5] for r in job_rows(data, now)) or any(c.problem for c in checks)
+    if getattr(args, "check", False) and needs:
         return 1
     return 0
 

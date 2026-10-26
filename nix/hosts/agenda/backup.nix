@@ -9,6 +9,7 @@
   agendaStatus,
   agendaManage,
   egressRefresh,
+  recordIfSilent,
   ...
 }:
 let
@@ -49,13 +50,18 @@ let
     text = ''
       export ${tz}
       export PATH="${dirOf egressRefresh}:$PATH"
-      exec ${python} -I ${../../../tools/restore.py} "$@"
+      # One restore at a time, the monthly test included (its unit runs this same command).
+      rc=0
+      flock --nonblock --conflict-exit-code 75 /run/agenda-restore.lock \
+        ${python} -I ${../../../tools/restore.py} "$@" || rc=$?
+      if [ "$rc" = 75 ]; then echo "agenda-restore: another restore is running" >&2; fi
+      exit "$rc"
     '';
   };
 
   # Timer jobs as root (they drop to postgres and agenda themselves), after the network and
   # the egress sets.
-  job = description: exec: {
+  job = name: description: exec: {
     inherit description;
     after = [
       "postgresql.service"
@@ -72,6 +78,7 @@ let
       Type = "oneshot";
       ExecStartPre = egressRefresh;
       ExecStart = exec;
+      ExecStopPost = recordIfSilent name "${name}.service";
       TimeoutStartSec = "3h";
     };
   };
@@ -96,11 +103,13 @@ let
     # pgBackRest itself never expires a full backup by count.
     repo1-retention-full-type=count
     repo1-retention-full=9999
-    # WAL for point-in-time recovery over the last 7 days, with one full backup a day: the
-    # newest 8 full backups keep their WAL (backup_tiers.ARCHIVE_RETENTION_FULL); older
-    # backups keep only what makes them consistent.
+    # WAL for point-in-time recovery over the last 7 days: agenda-backup passes the count of
+    # newest fulls that keep their WAL on every run (backup_tiers.archive_retention, by
+    # time, so DST and extra fulls don't shorten it). This default only applies to a backup
+    # or expire run by hand, and errs on keeping more. Older backups keep only what makes
+    # them consistent.
     repo1-retention-archive-type=full
-    repo1-retention-archive=8
+    repo1-retention-archive=31
     archive-async=y
     spool-path=/var/spool/pgbackrest
     compress-type=zst
@@ -160,12 +169,12 @@ in
   # Every night a full backup with its tier, then the expiry by tier; the monthly restore
   # test runs steps 1-2 of the restore (tools/restore.py --test-only) on the latest backup.
   # Each records its outcome in the status file.
-  systemd.services.pgbackrest-backup = job "pgBackRest: full backup, annotated by tier" "${agendaBackup}/bin/agenda-backup run";
+  systemd.services.pgbackrest-backup = job "pgbackrest-backup" "pgBackRest: full backup, annotated by tier" "${agendaBackup}/bin/agenda-backup run";
   systemd.timers.pgbackrest-backup = timer "*-*-* 01:30 Europe/Paris";
   systemd.services.pgbackrest-tier-expire =
-    job "pgBackRest: expire backups past their tier's age" "${agendaBackup}/bin/agenda-backup expire";
+    job "pgbackrest-tier-expire" "pgBackRest: expire backups past their tier's age" "${agendaBackup}/bin/agenda-backup expire";
   systemd.timers.pgbackrest-tier-expire = timer "*-*-* 02:30 Europe/Paris";
-  systemd.services.restore-test = job "Restore test: the latest backup into tank/pg-restore, sanity checks" "${agendaRestore}/bin/agenda-restore --test-only";
+  systemd.services.restore-test = job "restore-test" "Restore test: the latest backup into tank/pg-restore, sanity checks" "${agendaRestore}/bin/agenda-restore --test-only";
   systemd.timers.restore-test = timer "*-*-02 04:00 Europe/Paris";
 
   # The stanza, once the database runs (idempotent: a no-op when it exists and matches).

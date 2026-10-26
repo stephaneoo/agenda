@@ -120,3 +120,76 @@ def test_django_status_record_writes_the_same_format(settings, tmp_path) -> None
     line = line_for(statusfile.render(statusfile.read(settings.STATUS_FILE), now=datetime.now(UTC), system=[]),
                     "sync-datatourisme")
     assert "clean" in line and "STALE" not in line
+
+
+# --- Batch D review: system checks feed "needs attention" -----------------------------------------
+
+def test_a_system_check_needing_attention_is_listed(tmp_path) -> None:
+    t = NOW - timedelta(hours=1)
+    jobs = {n: job("ok", t, t) for n in statusfile.EXPECTED}
+    calm = statusfile.render(statusfile.read(write(tmp_path, jobs)), now=NOW,
+                             system=[statusfile.Check("disk /: 10% used", None)])
+    assert "all jobs ok" in calm
+    worried = statusfile.render(statusfile.read(write(tmp_path, jobs)), now=NOW,
+                                system=[statusfile.Check("disk /: 91% used", "disk / over 80%")])
+    assert "needs attention: disk / over 80%" in worried and "all jobs ok" not in worried
+
+
+@pytest.mark.parametrize(("used", "problem"), [(79.9, False), (80.1, True)])
+def test_disk_over_80_percent(used, problem) -> None:
+    assert (statusfile.disk_problem("/", used) is not None) is problem
+
+
+@pytest.mark.parametrize(("health", "cap", "problem"), [("ONLINE", "10%", False), ("DEGRADED", "10%", True),
+                                                         ("ONLINE", "85%", True), ("FAULTED", "1%", True)])
+def test_pool_not_online_or_full(health, cap, problem) -> None:
+    assert (statusfile.pool_problem("tank", health, cap) is not None) is problem
+
+
+def archiver(**kw) -> dict:
+    base = {"current_wal": "00000001000000000000000B", "last_archived_wal": "00000001000000000000000A",
+            "last_archived_time": NOW - timedelta(minutes=1), "last_failed_time": None}
+    return {**base, **kw}
+
+
+def test_archiver_healthy_and_idle_are_fine() -> None:
+    assert statusfile.archiver_problem(archiver(), NOW) is None
+    # Idle database: nothing new to archive, however old the last archive is.
+    assert statusfile.archiver_problem(archiver(last_archived_time=NOW - timedelta(days=2)), NOW) is None
+    assert statusfile.archiver_problem(archiver(current_wal="00000001000000000000000A",
+                                                last_archived_time=NOW - timedelta(days=2)), NOW) is None
+
+
+def test_archiver_failing_since_its_last_success() -> None:
+    p = statusfile.archiver_problem(archiver(last_failed_time=NOW - timedelta(seconds=30)), NOW)
+    assert p and "failing" in p
+    # A failure before the last success is history.
+    assert statusfile.archiver_problem(archiver(last_failed_time=NOW - timedelta(hours=1)), NOW) is None
+
+
+def test_archiver_behind_for_15_minutes() -> None:
+    behind = archiver(current_wal="00000001000000000000000D", last_archived_time=NOW - timedelta(minutes=16))
+    assert "behind" in statusfile.archiver_problem(behind, NOW)
+    recent = archiver(current_wal="00000001000000000000000D", last_archived_time=NOW - timedelta(minutes=5))
+    assert statusfile.archiver_problem(recent, NOW) is None
+    never = archiver(current_wal="000000010000000000000003", last_archived_wal=None, last_archived_time=None)
+    assert "behind" in statusfile.archiver_problem(never, NOW)
+
+
+@pytest.mark.parametrize(("left", "problem"), [(timedelta(days=4), False), (timedelta(days=2, hours=23), True),
+                                               (-timedelta(hours=1), True)])
+def test_certificate_expiring_within_3_days(left, problem) -> None:
+    assert (statusfile.cert_problem("51.15.79.107", NOW + left, NOW) is not None) is problem
+
+
+def test_record_if_silent_only_writes_when_the_job_did_not(tmp_path) -> None:
+    path = tmp_path / "s" / "status.json"
+    start = datetime.now(UTC) - timedelta(minutes=5)
+    statusfile.record(path, "pgbackrest-backup", "failed", "S3 unreachable")
+    assert statusfile.main(["--file", str(path), "record-if-silent", "--since", str(int(start.timestamp())),
+                            "pgbackrest-backup", "failed", "unit stopped: timeout"]) == 0
+    assert json.loads(path.read_text())["jobs"]["pgbackrest-backup"]["summary"] == "S3 unreachable"
+    later = datetime.now(UTC) + timedelta(minutes=1)
+    assert statusfile.main(["--file", str(path), "record-if-silent", "--since", str(int(later.timestamp())),
+                            "pgbackrest-backup", "failed", "unit stopped: timeout"]) == 0
+    assert json.loads(path.read_text())["jobs"]["pgbackrest-backup"]["summary"] == "unit stopped: timeout"

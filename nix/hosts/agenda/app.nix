@@ -8,6 +8,7 @@
   agendaApp,
   agendaStatus,
   egressRefresh,
+  recordIfSilent,
   ...
 }:
 let
@@ -214,15 +215,7 @@ in
       ExecStart = "${manage} sync_datatourisme";
       TimeoutStartSec = "1h";
       MemoryMax = "512M";
-      # The command records its own outcome; a kill (timeout, memory) leaves no trace, so
-      # record that here.
-      ExecStopPost = pkgs.writeShellScript "sync-datatourisme-killed" ''
-        case "$SERVICE_RESULT" in
-          success|exit-code) ;;
-          *) ${agendaStatus}/bin/agenda-status record sync-datatourisme failed \
-               "unit stopped: $SERVICE_RESULT ($EXIT_CODE $EXIT_STATUS)" ;;
-        esac
-      '';
+      ExecStopPost = recordIfSilent "sync-datatourisme" "sync-datatourisme.service";
     };
   };
 

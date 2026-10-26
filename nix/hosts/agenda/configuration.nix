@@ -37,11 +37,15 @@ let
       config.systemd.package
     ];
     text = ''
-      # The names resolve to addresses that change every few minutes (the S3 endpoint has
-      # shown six in an hour). So each set holds every address seen for its names in the
-      # last 24 h: the cached answer (what the jobs get from resolved) and an uncached one,
-      # every minute and right before each job. Replaced in one nft transaction; a name
-      # that doesn't resolve leaves what was seen before.
+      # The names resolve to addresses that change every few minutes (the S3 endpoint showed
+      # 85 addresses in four Scaleway /24s within 4 hours). Scaleway publishes no Object
+      # Storage IP ranges (checked 2026-10-26, scaleway.com/en/docs/object-storage), and
+      # pinning pgBackRest to one address would break at the next rotation. So each set holds
+      # every address seen for its names in the last 7 days: the cached answer (what the
+      # jobs get from resolved) and an uncached one, every minute and right before each job.
+      # An address not seen yet fails for a minute at most, and the status report flags WAL
+      # archiving that falls behind (agenda_site/statusfile.py). Replaced in one nft
+      # transaction; a name that doesn't resolve leaves what was seen before.
       state=/var/lib/agenda-egress
       now=$(date +%s)
       ipv4='^([0-9]{1,3}\.){3}[0-9]{1,3}$'
@@ -55,7 +59,7 @@ let
             resolvectl query -4 --cache=no --legend=no "$name" 2>/dev/null | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || true
           } | grep -E "$ipv4" | sort -u | awk -v t="$now" '{print $1, t}' >> "$f"
         done
-        awk -v cutoff=$((now - 86400)) '
+        awk -v cutoff=$((now - 7 * 86400)) '
           $2 > seen[$1] { seen[$1] = $2 }
           END { for (ip in seen) if (seen[ip] >= cutoff) print ip, seen[ip] }' "$f" | sort > "$f.new"
         mv "$f.new" "$f"
@@ -186,6 +190,21 @@ in
     };
   };
   _module.args.egressRefresh = "${egressRefresh}/bin/agenda-egress-refresh";
+
+  # ExecStopPost for every timer job: when the unit failed (killed, timed out, crashed)
+  # without the job recording anything since it started, record that, so the status shows
+  # it instead of going STALE a day later.
+  _module.args.recordIfSilent =
+    job: unit:
+    pkgs.writeShellScript "record-${job}-if-silent" ''
+      [ "$SERVICE_RESULT" = success ] && exit 0
+      started=$(${config.systemd.package}/bin/systemctl show -P InactiveExitTimestamp ${unit})
+      since=$(${pkgs.coreutils}/bin/date -d "$started" +%s 2>/dev/null || echo 0)
+      as_agenda=()
+      [ "$(${pkgs.coreutils}/bin/id -u)" = 0 ] && as_agenda=(${pkgs.util-linux}/bin/runuser -u agenda --)
+      exec "''${as_agenda[@]}" ${agendaStatus}/bin/agenda-status record-if-silent --since "$since" ${job} failed \
+        "unit stopped: $SERVICE_RESULT ($EXIT_CODE $EXIT_STATUS), the job recorded nothing"
+    '';
 
   # --- Access: root by key only.
   services.openssh = {
