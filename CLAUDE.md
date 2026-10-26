@@ -1,3 +1,6 @@
+**At the start of every session, ask Pierre whether he wants the server status (sync,
+backups, restore test, disk). If he says yes, run `nix run .#status` and summarise it.**
+
 # Agenda
 
 Local events agenda around Nyons. Django monolith packaged with uv2nix, deployed to a NixOS host.
@@ -69,6 +72,42 @@ generated files back with `tools/dev pull <path>`. The sync sends what `git ls-f
 (tracked, plus untracked but not ignored) and deletes on the VM what is gone locally. Flakes only see files tracked by git, so
 `git add` new files before running Nix.
 
+## Operations
+
+The site runs on one NixOS host: `https://51.15.79.107/` (Scaleway DEV1-M, nl-ams-1; backups in
+fr-par). **`docs/ops/RUNBOOK.md` is the procedure for every operation**: follow it, command by
+command, and explain to the colleague in plain French what happened.
+
+- `nix run .#status`: the status report over SSH (the same as the MOTD).
+- `nix run .#deploy`: the guarded deploy (`tools/deploy.py`): clean tree and `main` =
+  `origin/main`, every check, the system built on the host, deploy-rs with magic rollback,
+  `/healthz` (`"debug": false`) or a switch back, then the `deploy-<UTC>` tag pushed.
+- `nix run .#restore -- [--target-time T | --set L] [--test-only]`: `agenda-restore` on the
+  host (`tools/restore.py`); always `--test-only` first.
+- `nix run .#admin-tunnel`: the admin on `http://localhost:8000/admin/` (never public).
+- On the host: `agenda-manage <command>` (a management command with the app's environment),
+  `agenda-status`, `agenda-backup run|expire`, `agenda-restore`.
+
+Safe without Pierre: deploy, rollback (system profile, see the runbook), re-running the sync, reading logs, the restore script,
+unlocking a moderator. **Waits for Pierre**: changing the backup configuration or retention,
+deleting backups, buckets, volumes or datasets (`tank/pg-prev-*` included), any other change
+to the ZFS pool, manual SQL, `infra/` (`tofu apply`), secrets, who may SSH in.
+
+Host layout (`nix/hosts/agenda/`): `site.nix` (address, disks, root keys), `configuration.nix`
+(boot, network, firewall 22/80/443, the egress allow-list, users, sops), `postgres.nix`,
+`app.nix` (gunicorn on a Unix socket for Caddy and on 127.0.0.1:8000; migrations; the sync),
+`caddy.nix`, `timers.nix`, `backup.nix` (pgBackRest, tiers, restore test). `nix/app.nix`: the
+production venv (`deps.default`), the source (app directories only) and the static files,
+collected at build time. `nix/ops.nix`: the laptop apps.
+
+- Egress: the `agenda` and `postgres` users may only reach DNS (through resolved on loopback)
+  and 443 on the addresses their names resolved to in the last 24 h (`agenda-egress`, every
+  minute and before each job): data.gouv.fr for the sync, the S3 endpoint for pgBackRest. A
+  new outbound host for the app means adding its name to `egressNames`.
+- Unit `Environment=` expands `%`: `app.nix` writes it `%%` (the socket URL's `%2F`).
+- The status file format lives in `agenda_site/statusfile.py` (no Django), shared by the app,
+  `agenda-status` and the MOTD.
+
 ## Conventions
 
 - Write claims only through `claims.services.write_claims` / `delete_claim` (the admin and
@@ -125,4 +164,6 @@ generated files back with `tools/dev pull <path>`. The sync sends what `git ls-f
 
 ## Secrets
 
-Never commit or copy `.env`, `.secrets/`, keys or passwords.
+Never commit or copy `.env`, `.secrets/`, keys or passwords. Host secrets live in
+`secrets/agenda.yaml`, sops-encrypted to the host and the operator age key (`.sops.yaml`); only
+the encrypted file is committed. See the runbook's "Secrets" section for where each one lives.
