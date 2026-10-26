@@ -53,10 +53,17 @@ The colleague deploys from a Mac. Once, with Claude:
 6. **A first `nix run .#check`**: it builds the test environment for the Mac (long the first
    time) and runs every check. Success: it ends without an error.
 
-The server is the only Linux machine: the system is built **on the server** during a deploy
+From a Mac, the system is built **on the server** during a deploy
 (`nix build --store ssh-ng://…`), and the browser test (e2e) runs there too, from the copy of
-the repo the deploy sends, in its own unit capped at 1.2 GB of memory and a low CPU share so
-that it can't crowd out the database. Nothing needs a Linux VM on the Mac.
+the repo the deploy sends: root builds it, then it runs in its own unit as an ephemeral
+unprivileged user, in a network namespace of its own (no network but its own loopback),
+capped at 1.2 GB of memory and a low CPU share so that it can't crowd out the database.
+
+**The dev VM** (`agenda-dev`, nl-ams-1, `tools/dev`) is the permanent development and deploy
+machine: it has Nix (Pierre's laptop doesn't), and deploys run there through
+`tools/dev run-agent '<command>'`, with a throwaway SSH agent holding only prod's root key
+(`.secrets/agenda_prod_ed25519`) for that one command. The VM's own key
+(`.secrets/agenda_ed25519`) reaches the VM only; prod refuses it.
 
 **Not verified on a Mac yet** (nothing was ever built on darwin in the build session; the
 apps only evaluate): `nix run .#check` (pytest with PostGIS, the JS tests, the infra check on
@@ -121,8 +128,10 @@ rollback"). If `/healthz` fails after activation, the deploy switches back to th
 generation and says so. Either way the site keeps running on the old version; read the
 output, fix, deploy again.
 
-Only one deploy runs at a time: a second one, from another laptop, is refused with "another
-deploy holds /run/agenda-deploy.lock". Wait for the first to finish.
+Only one deploy runs at a time, and never during a restore: from before the e2e reaches the
+server until the tag, the deploy holds `/run/agenda-deploy.lock` and `/run/agenda-restore.lock`
+(the restore takes the same two). A second deploy, or one during a restore, is refused with
+"another deploy or a restore holds …". Wait for the first to finish.
 
 If the tag push failed at the end: `git push origin deploy-<timestamp>` (the next deploy's
 migration check compares against it).
@@ -173,7 +182,11 @@ it (no migration the deployed code doesn't know, tables non-empty, latest claim 
 than the target), then drops the scratch copy. The live database is never touched. A
 `note: … migration(s) … not applied yet` line is normal for a backup older than the last
 deploy: they are applied when the site starts on the restored data. Only one restore runs at
-a time (the monthly test included): a second one says `another restore is running`.
+a time (the monthly test included), and never during a deploy: a second one, or one during a
+deploy, says `another restore or a deploy is running` (the monthly test waits up to an hour
+instead). A restore trusts the backup's own `postgresql.auto.conf` (accepted for v1: it only
+holds what was set with `ALTER SYSTEM` on the live database; the restore drops any
+`archive_mode` line from it).
 (2026-10-26 drill: see "Drills".)
 
 The real restore, when data was lost or damaged, **with the colleague's agreement on the
@@ -272,6 +285,43 @@ URL, the allowed host and Caddy's certificate name, with a normal Let's Encrypt 
 turn HSTS on (`SECURE_HSTS_SECONDS` in `agenda_site/settings.py`, and drop `security.W004` from
 `SILENCED_SYSTEM_CHECKS`), and deploy.
 
+### Backups deleted from the bucket
+
+The bucket `agenda-wals` is versioned (`infra/main.tf`): a delete or an overwrite by the
+server's pgBackRest key only hides the object behind a *delete marker* or a newer version;
+the old version stays for **30 days**, then expires. The key can't delete a version, suspend
+versioning or change the lifecycle (its bucket policy grants none of these; checked
+2026-10-26: deleting a version with it gets `AccessDenied`). So if the server is compromised
+and the backups "disappear", they can be brought back within 30 days, **by Pierre**, with his
+own Scaleway key (an admin principal), from the dev VM:
+
+1. Don't trust the server: rotate the pgBackRest key first (`infra/README.md`, Key expiry),
+   so that whoever deleted can't keep deleting.
+2. List what was deleted: `aws s3api list-object-versions --bucket agenda-wals --prefix pgbackrest/`
+   (endpoint `https://s3.fr-par.scw.cloud`, region `fr-par`). The deleted objects have a
+   `DeleteMarkers` entry with `IsLatest: true`.
+3. Undelete each one by removing its delete marker:
+   `aws s3api delete-object --bucket agenda-wals --key <key> --version-id <the marker's VersionId>`.
+   An overwritten object: copy the good version back on top
+   (`aws s3api copy-object --copy-source agenda-wals/<key>?versionId=<id> --bucket agenda-wals --key <key>`).
+4. Check: `nix run .#ssh -- 'runuser -u postgres -- pgbackrest --stanza=agenda info'` lists the
+   backups again, then `nix run .#restore -- --test-only`.
+
+Deleting versions by hand is deleting backups: never, unless Pierre does it.
+
+### Accepted for v1: what the egress allow-list doesn't stop
+
+The `agenda` and `postgres` users may only reach their allow-listed hosts on 443, but a
+compromised app could still get data out through:
+
+- **DNS**: every user resolves names through resolved, which forwards to Scaleway's resolvers;
+  a name lookup can carry data out.
+- **The S3 endpoint**: `s3.fr-par.scw.cloud` is multi-tenant. The `postgres` user can reach any
+  bucket there with keys of its own, not only `agenda-wals`.
+- **The allow-sets come from DNS, without DNSSEC**: whoever controls the answers resolved gets
+  can add addresses to the sets for a while (7 days of memory).
+- **Caddy**, root and nix are not restricted at all (Caddy needs ACME).
+
 ## Waits for Pierre
 
 Never do these, even if asked; explain that Pierre decides, and leave him a note:
@@ -292,7 +342,8 @@ Never do these, even if asked; explain that Pierre decides, and leave him a note
 | Operator age key | `.secrets/age-operator.txt` on Pierre's laptop (never committed) |
 | Repository passphrase, a copy | `.secrets/pgbackrest-cipher-pass.txt` on Pierre's laptop. **Without it the backups can't be read**: keep a copy outside the laptop (password manager) |
 | `pierre` admin password | `.secrets/admin-pierre.txt` on Pierre's laptop |
-| SSH key for root | `.secrets/agenda_ed25519` (Claude's); each person's own key otherwise |
+| SSH key for root on prod | `.secrets/agenda_prod_ed25519` (prod only, in `rootKeys`); each person's own key otherwise |
+| SSH key for the dev VM | `.secrets/agenda_ed25519` (the VM only; prod refuses it) |
 | Tofu state (holds the API keys) | only in the bucket `agenda-tfstate` |
 
 Editing a secret (Pierre): `SOPS_AGE_KEY_FILE=.secrets/age-operator.txt sops secrets/agenda.yaml`,
@@ -306,7 +357,7 @@ the dev VM; they expire on **2027-10-25** (`infra/README.md`, Key expiry).
   checks 2 s). The monthly `restore-test` unit passed the same day.
 - 2026-10-26, rollback and forward again, following "Rollback" above: generation 7 to 6 and
   back to 7, `/healthz` ok (`"debug": false`) at each step.
-- 2026-10-26, first `nix run .#deploy` (run from the dev VM, standing in for the laptop):
+- 2026-10-26, first `nix run .#deploy` (run from the dev VM):
   every check, the build on the host, deploy-rs, `/healthz`, tag `deploy-20261026T094007Z`.
 
 ## Rebuilding the server (Pierre)
