@@ -102,11 +102,16 @@ in
       cp ${zip} $mirror/terraform-provider-scaleway_${version}_${platform.name}.zip
       cp -r ${self}/infra infra
       chmod -R u+w infra
-      cd infra
       export HOME=$TMPDIR TF_IN_AUTOMATION=1
-      tofu fmt -check -diff
-      tofu init -backend=false -input=false -lockfile=readonly -plugin-dir=$TMPDIR/mirror >/dev/null
-      tofu validate
+      # Prod (infra/) and the dev VM (infra/dev/): two root modules, two states.
+      for dir in infra infra/dev; do
+        (
+          cd $dir
+          tofu fmt -check -diff
+          tofu init -backend=false -input=false -lockfile=readonly -plugin-dir=$TMPDIR/mirror >/dev/null
+          tofu validate
+        )
+      done
       touch $out
     '';
 

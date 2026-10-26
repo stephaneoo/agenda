@@ -1,0 +1,14 @@
+#cloud-config
+# First boot of the dev VM (infra/dev/main.tf): what the original agenda-dev had by hand.
+# Determinate Nix, pinned (the version the first VM ran); git and rsync for tools/dev; the
+# repo directory and the local mirror the deploy clones from (docs/ops/RUNBOOK.md, Deploy).
+package_update: true
+packages:
+  - git
+  - rsync
+runcmd:
+  - [sh, -c, "curl --proto '=https' --tlsv1.2 -fsSL https://install.determinate.systems/nix/tag/v3.24.0 | sh -s -- install --no-confirm"]
+  - [git, config, --system, --add, safe.directory, /srv/agenda]
+  - [mkdir, -p, /srv/agenda]
+  - [git, init, -q, --bare, /srv/origin-mirror.git]
+  - [touch, /var/lib/agenda-dev-ready]
