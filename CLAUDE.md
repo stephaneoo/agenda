@@ -78,10 +78,15 @@ The site runs on one NixOS host: `https://51.15.79.107/` (Scaleway DEV1-M, nl-am
 fr-par). **`docs/ops/RUNBOOK.md` is the procedure for every operation**: follow it, command by
 command, and explain to the colleague in plain French what happened.
 
-- `nix run .#status`: the status report over SSH (the same as the MOTD).
+- `nix run .#status`: the status report over SSH (the same as the MOTD), jobs plus the
+  host's checks (disk, pool, WAL archiving, certificate).
+- `nix run .#ssh -- '<command>'`: a command on the host as root, with the pinned host key and
+  `AGENDA_SSH_KEY`. Use it for every command on the server; never plain `ssh`.
 - `nix run .#deploy`: the guarded deploy (`tools/deploy.py`): clean tree and `main` =
   `origin/main`, every check, the system built on the host, deploy-rs with magic rollback,
-  `/healthz` (`"debug": false`) or a switch back, then the `deploy-<UTC>` tag pushed.
+  `/healthz` (`"debug": false`) or a switch back, then the `deploy-<UTC>` tag pushed. One at
+  a time (an flock on the host). From a Mac the e2e runs on the host, bounded
+  (`deploy.remote_e2e_command`); `--remote-e2e` forces that path from Linux.
 - `nix run .#restore -- [--target-time T | --set L] [--test-only]`: `agenda-restore` on the
   host (`tools/restore.py`); always `--test-only` first.
 - `nix run .#admin-tunnel`: the admin on `http://localhost:8000/admin/` (never public).
@@ -101,7 +106,7 @@ production venv (`deps.default`), the source (app directories only) and the stat
 collected at build time. `nix/ops.nix`: the laptop apps.
 
 - Egress: the `agenda` and `postgres` users may only reach DNS (through resolved on loopback)
-  and 443 on the addresses their names resolved to in the last 24 h (`agenda-egress`, every
+  and 443 on the addresses their names resolved to in the last 7 days (`agenda-egress`, every
   minute and before each job): data.gouv.fr for the sync, the S3 endpoint for pgBackRest. A
   new outbound host for the app means adding its name to `egressNames`.
 - Unit `Environment=` expands `%`: `app.nix` writes it `%%` (the socket URL's `%2F`).

@@ -54,8 +54,9 @@ The colleague deploys from a Mac. Once, with Claude:
    time) and runs every check. Success: it ends without an error.
 
 The server is the only Linux machine: the system is built **on the server** during a deploy
-(`nix build --store ssh-ng://…`), and the browser test (e2e) runs there too. Nothing needs a
-Linux VM on the Mac.
+(`nix build --store ssh-ng://…`), and the browser test (e2e) runs there too, from the copy of
+the repo the deploy sends, in its own unit capped at 1.2 GB of memory and a low CPU share so
+that it can't crowd out the database. Nothing needs a Linux VM on the Mac.
 
 **Not verified on a Mac yet** (nothing was ever built on darwin in the build session; the
 apps only evaluate): `nix run .#check` (pytest with PostGIS, the JS tests, the infra check on
@@ -63,13 +64,35 @@ darwin), `nix run .#deploy` end to end (the flake copy for the e2e, the remote b
 from darwin), the admin tunnel in Safari (Secure cookies on `http://localhost`). Do these
 with Pierre the first time, and fix what breaks before relying on them.
 
+## Commands on the server
+
+Every command on the server goes through
+
+    nix run .#ssh -- '<command>'
+
+(`nix run .#ssh` alone opens a shell there.) It is ssh as root, with the server's key pinned
+(`nix/hosts/agenda/known_hosts`: a changed key is refused, never accepted) and the key from
+`AGENDA_SSH_KEY`. If it says the host key changed, stop: Pierre.
+
 ## Status
 
     nix run .#status
 
 The same report as at every SSH login (the MOTD). Each job shows `ok`, `PARTIAL`, `FAILED`
-or `STALE` (no success within its interval), then disk and ZFS pool usage. The last line says
-`all jobs ok` or lists what needs attention.
+or `STALE` (no success within its interval). Then the server's own checks: disk usage, the
+ZFS pool, WAL archiving (the continuous backup between nightly ones), the TLS certificate.
+The last line says `all jobs ok` or lists what needs attention, jobs and checks alike:
+
+- `disk … over 80%` or `zpool tank over 80%` / `zpool tank DEGRADED` (or anything not
+  `ONLINE`): Pierre.
+- `WAL archiving failing since …` or `WAL archiving behind`: the continuous backup is
+  stuck. Look at `nix run .#ssh -- 'journalctl -u postgresql -n 50 --no-pager | grep -i archive'`.
+  A network error to the S3 endpoint usually clears within minutes (the outbound allow-list
+  learns new addresses every minute). Still there after an hour: Pierre.
+- `TLS certificate … expires …` (under 3 days left): Caddy hasn't renewed. See "The
+  certificate" below.
+- A job that was killed (timeout, out of memory) shows `FAILED` with `unit stopped: …, the
+  job recorded nothing`.
 
 - `sync-datatourisme` FAILED or PARTIAL: see "The sync" below.
 - `pgbackrest-backup` FAILED or STALE: read the log (`journalctl -u pgbackrest-backup`); a
@@ -98,38 +121,41 @@ rollback"). If `/healthz` fails after activation, the deploy switches back to th
 generation and says so. Either way the site keeps running on the old version; read the
 output, fix, deploy again.
 
+Only one deploy runs at a time: a second one, from another laptop, is refused with "another
+deploy holds /run/agenda-deploy.lock". Wait for the first to finish.
+
 If the tag push failed at the end: `git push origin deploy-<timestamp>` (the next deploy's
 migration check compares against it).
 
 ### Rollback (to the previous system generation)
 
-    ssh root@51.15.79.107 'nix-env -p /nix/var/nix/profiles/system --rollback && /nix/var/nix/profiles/system/bin/switch-to-configuration switch'
+    nix run .#ssh -- 'nix-env -p /nix/var/nix/profiles/system --rollback && /nix/var/nix/profiles/system/bin/switch-to-configuration switch'
 
 (Not `nixos-rebuild --rollback`: it wants a NixOS configuration on the server, and there is
 none; the configuration lives in this repo.) Success: it prints the units it stopped and started, then
-`ssh root@51.15.79.107 "curl -sS -H 'Host: 127.0.0.1' http://127.0.0.1:8000/healthz"` answers
+`nix run .#ssh -- "curl -sS -H 'Host: 127.0.0.1' http://127.0.0.1:8000/healthz"` answers
 `{"status": "ok", …, "debug": false}` and `nix run .#status` works. Each run goes one
 generation further back. If it fails, tell Pierre.
 
 To go forward again to the newest generation (after the problem is understood), or simply
 deploy `main` again with `nix run .#deploy`:
 
-    ssh root@51.15.79.107 'nix-env -p /nix/var/nix/profiles/system --list-generations'
-    ssh root@51.15.79.107 'nix-env -p /nix/var/nix/profiles/system --switch-generation <N> && /nix/var/nix/profiles/system/bin/switch-to-configuration switch'
+    nix run .#ssh -- 'nix-env -p /nix/var/nix/profiles/system --list-generations'
+    nix run .#ssh -- 'nix-env -p /nix/var/nix/profiles/system --switch-generation <N> && /nix/var/nix/profiles/system/bin/switch-to-configuration switch'
 
 A rollback does not undo migrations (they are expand-only between two deploys, so the
 previous code runs on the new schema). It does not touch data.
 
 ### Re-run the sync
 
-    ssh root@51.15.79.107 'systemctl start sync-datatourisme && journalctl -u sync-datatourisme -n 5 -o cat'
+    nix run .#ssh -- 'systemctl start sync-datatourisme; journalctl -u sync-datatourisme -n 5 -o cat'
 
 Success: a line `clean: … rows, … added, …` and `nix run .#status` shows the sync `ok`. It
 takes about 3 minutes.
 
 ### Read the logs
 
-    ssh root@51.15.79.107 'journalctl -u <unit> -n 100 --no-pager'
+    nix run .#ssh -- 'journalctl -u <unit> -n 100 --no-pager'
 
 Units: `agenda-web` (the site), `sync-datatourisme`, `pgbackrest-backup`,
 `pgbackrest-tier-expire`, `restore-test`, `agenda-migrate`, `caddy`, `postgresql`,
@@ -143,8 +169,12 @@ Always a test first:
 
 Success: `test restore of the latest backup: sanity checks passed in N s`. It restores the
 latest backup into the scratch dataset `tank/pg-restore` with a temporary PostgreSQL, checks
-it (migrations match the code, tables non-empty, latest claim no newer than the target), then
-drops the scratch copy. The live database is never touched. (2026-10-26 drill: see "Drills".)
+it (no migration the deployed code doesn't know, tables non-empty, latest claim no newer
+than the target), then drops the scratch copy. The live database is never touched. A
+`note: … migration(s) … not applied yet` line is normal for a backup older than the last
+deploy: they are applied when the site starts on the restored data. Only one restore runs at
+a time (the monthly test included): a second one says `another restore is running`.
+(2026-10-26 drill: see "Drills".)
 
 The real restore, when data was lost or damaged, **with the colleague's agreement on the
 moment to restore to**:
@@ -153,11 +183,12 @@ moment to restore to**:
     nix run .#restore -- --set 20261101-013002F                    # a backup set (pgbackrest info)
     nix run .#restore --                                           # the latest state
 
-It does the test steps, then snapshots the live dataset, stops the site, swaps the datasets,
-starts it and checks `/healthz`. The site is down for a minute or two. If anything fails
+It does the test steps, then snapshots the live dataset, stops the site, moves the live
+dataset aside and the restored one in, applies any missing migrations, starts the site and
+checks `/healthz`. The restored database keeps archiving its WAL like the live one did. The site is down for a minute or two. If anything fails
 after the swap, it swaps back by itself and says so. Success: `restored. The previous dataset
 is kept (tank/pg-prev-…)`. Then it takes a full backup. **The previous dataset stays; deleting
-it (after 7 days) waits for Pierre.** List backups: `ssh root@51.15.79.107 'runuser -u postgres -- pgbackrest --stanza=agenda info'`.
+it (after 7 days) waits for Pierre.** List backups: `nix run .#ssh -- 'runuser -u postgres -- pgbackrest --stanza=agenda info'`.
 
 For a mistake made in the last 48 h, the ZFS snapshots are faster, but rolling the pool back
 is a ZFS change: Pierre.
@@ -169,7 +200,7 @@ The admin is not on the public site (`/admin/` is a 404 there). Through an SSH t
     nix run .#admin-tunnel
 
 then open `http://localhost:8000/admin/` in the browser; Ctrl-C in the terminal closes it.
-(Equivalent: `ssh -N -L 8000:127.0.0.1:8000 root@51.15.79.107`.) Logins: Django accounts;
+(It is `ssh -N -L 8000:127.0.0.1:8000 root@51.15.79.107` with the pinned host key and `AGENDA_SSH_KEY`.) Logins: Django accounts;
 `pierre` is the superuser (password in Pierre's `.secrets/admin-pierre.txt`). New moderator:
 in the admin, Users, add, with "Staff status" and the group "Modérateurs".
 
@@ -177,7 +208,7 @@ in the admin, Users, add, with "Staff status" and the group "Modérateurs".
 
 After 5 failed logins an account is locked for an hour.
 
-    ssh root@51.15.79.107 'agenda-manage axes_reset_username <name>'
+    nix run .#ssh -- 'agenda-manage axes_reset_username <name>'
 
 Success: `1 attempts removed` (or similar). Then they log in again.
 
@@ -189,7 +220,7 @@ The summary line (status report, or `ingest.SyncRun` in the admin) says what hap
   area's future occurrences, so it withdrew nothing. Check upstream (the DATAtourisme data on
   data.gouv.fr: did those events really go?). Only if the withdrawals are right:
 
-      ssh root@51.15.79.107 'agenda-manage sync_datatourisme --allow-mass-withdrawal=N'
+      nix run .#ssh -- 'agenda-manage sync_datatourisme --allow-mass-withdrawal=N'
 
   with that same N. The command refuses any other count, and applies them only if it would
   withdraw exactly N again with rows fetched; otherwise it stays partial and its warning says
@@ -211,7 +242,7 @@ When parse or mapping code changes what a row becomes, bump `ingest.sync.PARSER_
 - A moved occurrence's new date belongs to moderation. If the event later disappears
   upstream, the moved one stays shown: hide it by hand in the admin.
 - After any change to a `Source` (priority, label, licence, external), the admin reprojects
-  everything. By hand: `ssh root@51.15.79.107 'agenda-manage rebuild_projection'`.
+  everything. By hand: `nix run .#ssh -- 'agenda-manage rebuild_projection'`.
 
 ### Service worker kill switch
 
@@ -226,13 +257,20 @@ remove it, commit, deploy.
 With "status file not written" in a job's journal: `/var/lib/agenda` is group- or
 world-writable, or not owned by `agenda`. Fix the directory, never loosen the check:
 
-    ssh root@51.15.79.107 'chown agenda:agenda /var/lib/agenda && chmod 0750 /var/lib/agenda'
+    nix run .#ssh -- 'chown agenda:agenda /var/lib/agenda && chmod 0750 /var/lib/agenda'
 
 ### The certificate
 
-Let's Encrypt certificates for an IP address last about 6 days; Caddy renews them by itself.
-If browsers report a certificate error: `journalctl -u caddy | grep -i -E "certif|acme"`. A
-renewal failure that lasts more than a day: Pierre.
+Let's Encrypt certificates for an IP address last about 6 days; Caddy renews them by itself,
+and the status report flags one with under 3 days left. If browsers report a certificate
+error, or the report flags it: `nix run .#ssh -- 'journalctl -u caddy --no-pager | grep -i -E "certif|acme" | tail -20'`.
+A renewal failure that lasts more than a day: Pierre.
+
+No HSTS while the site is on a bare IP: browsers ignore it for IP addresses. **When a domain
+exists** (Pierre): set it as `siteHost` in `nix/hosts/agenda/site.nix` (it becomes the site
+URL, the allowed host and Caddy's certificate name, with a normal Let's Encrypt profile),
+turn HSTS on (`SECURE_HSTS_SECONDS` in `agenda_site/settings.py`, and drop `security.W004` from
+`SILENCED_SYSTEM_CHECKS`), and deploy.
 
 ## Waits for Pierre
 
