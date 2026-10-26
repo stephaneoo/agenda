@@ -82,7 +82,7 @@ def test_pitr_window_covers_7_days() -> None:
     history = simulate(days)
     for day, sets in history[ARCHIVE_RETENTION_FULL - 1:]:  # once a week of backups exists
         now = at(day, 3)
-        assert now - pitr_start(sets) >= timedelta(days=7), day
+        assert now - pitr_start(sets, now) >= timedelta(days=7), day
     day, sets = history[-1]
     now = at(day, 3)
     by_tier = {t: [s for s in sets if s.tier == t] for t in ("daily", "weekly", "monthly")}
@@ -97,7 +97,7 @@ def test_failed_days_still_cover_7_days() -> None:
     start = date(2026, 3, 1)
     days = [start + timedelta(days=i) for i in range(60) if i % 3 != 1]  # every third day fails
     for day, sets in simulate(days):
-        assert at(day, 3) - pitr_start(sets) >= timedelta(days=7) or len(sets) < ARCHIVE_RETENTION_FULL
+        assert at(day, 3) - pitr_start(sets, at(day, 3)) >= timedelta(days=7) or len(sets) < ARCHIVE_RETENTION_FULL
 
 
 def test_parse_info_reads_labels_tiers_and_stop_times() -> None:
@@ -114,3 +114,56 @@ def test_parse_info_reads_labels_tiers_and_stop_times() -> None:
         BackupSet("20261101-010001F", "monthly", datetime.fromtimestamp(1793494861, UTC)),
         BackupSet("20261102-010001F", None, datetime.fromtimestamp(1793581261, UTC)),
     ]
+
+
+# --- Batch D review: Paris months, PITR by time ------------------------------------------------------
+
+from zoneinfo import ZoneInfo  # noqa: E402
+
+from tools.backup_tiers import archive_retention  # noqa: E402
+
+PARIS = ZoneInfo("Europe/Paris")
+
+
+def paris(y, m, d, h=1, mi=30) -> datetime:
+    return datetime(y, m, d, h, mi, tzinfo=PARIS).astimezone(UTC)
+
+
+def test_the_month_is_the_paris_month_in_summer() -> None:
+    # 2027-06-01 01:30 CEST is 2027-05-31 23:30 UTC: still June's monthly.
+    june_first = BackupSet("a", "monthly", paris(2027, 6, 1))
+    assert june_first.stop_time.month == 5
+    assert tier_for(date(2027, 6, 2), [june_first]) == "daily"
+    assert tier_for(date(2027, 6, 1), [BackupSet("b", "monthly", paris(2027, 5, 1))]) == "monthly"
+
+
+def wal_reach(sets, now) -> timedelta:
+    """How far back point-in-time recovery reaches: WAL is kept from the
+    archive_retention(sets, now)-th newest set on."""
+    ordered = sorted(sets, key=lambda s: s.stop_time)
+    n = archive_retention(sets, now)
+    return now - ordered[-min(n, len(ordered))].stop_time
+
+
+@pytest.mark.parametrize("extra", [set(), {5, 6, 20, 21, 22, 40}])
+def test_pitr_covers_7_days_across_dst_and_extra_fulls(extra) -> None:
+    """Daily 01:30 Paris backups from 2027-03-10 to 2027-04-30 (DST starts 2027-03-28) and
+    from 2027-10-10 to 2027-11-20 (it ends 2027-10-31), some days with extra full backups (a
+    restore, a manual one): every day from the 8th on, WAL reaches back 7 days or more."""
+    for start in (date(2027, 3, 10), date(2027, 10, 10)):
+        days = [start + timedelta(days=i) for i in range(45)]
+        for i, (day, sets) in enumerate(simulate(days, extra_days={days[j] for j in extra if j < len(days)})):
+            if i < 8:
+                continue
+            now = paris(day.year, day.month, day.day, 3, 0)
+            assert wal_reach(sets, now) >= timedelta(days=7), (day, len(sets))
+
+
+def test_sets_within_8_days_are_never_expired() -> None:
+    now = paris(2027, 4, 1, 3, 0)
+    # Twenty backups in the last 8 days (restores), older ones beyond: none of the recent go.
+    recent = [BackupSet(f"r{i}", "daily", now - timedelta(hours=9 * i + 1)) for i in range(20)]
+    old = [BackupSet(f"o{i}", "daily", now - timedelta(days=40 + i)) for i in range(3)]
+    gone = set(sets_to_expire(recent + old, now))
+    assert not gone & {s.label for s in recent}
+    assert archive_retention(recent + old, now) >= len([s for s in recent if now - s.stop_time <= timedelta(days=7)]) + 1

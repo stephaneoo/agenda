@@ -7,9 +7,14 @@ weeks, a monthly for 6 months". So every backup is a full one annotated `tier=<t
 
 - tier_for(today, existing): the first backup of a month is monthly, any other Sunday weekly,
   everything else daily.
-- sets_to_expire(sets, now): past AGES[tier]. The newest ARCHIVE_RETENTION_FULL sets are
-  never expired (the newest full among them), so the WAL kept from the oldest of them
-  (pgBackRest repo1-retention-archive=8, backup.nix) always spans the 7-day PITR window.
+- sets_to_expire(sets, now): past AGES[tier]. Never expired: the newest
+  ARCHIVE_RETENTION_FULL sets, every set that stopped within PROTECT (8 days), and the "base"
+  (the newest set that stopped before the 7-day window opened, where its WAL replay starts).
+- archive_retention(sets, now): how many of the newest full sets keep their WAL, so that it
+  reaches back from the base: pgBackRest's --repo1-retention-archive, computed for each
+  backup and expiry run. By time, not count, so DST (a 23 h day) and extra full backups (a
+  restore, a manual one) never shorten the window.
+Months and weekdays are Paris ones (a backup at 01:30 CEST stopped the day before in UTC).
 
     agenda-backup run       a full backup, annotated with today's tier (Europe/Paris)
     agenda-backup expire    expire the sets past their tier's age
@@ -25,6 +30,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Callable, Iterable
+from zoneinfo import ZoneInfo
 
 AGES: dict[str, timedelta] = {
     "daily": timedelta(days=30),
@@ -34,6 +40,8 @@ AGES: dict[str, timedelta] = {
 # An unannotated set (a backup taken by hand) is kept as long as a monthly.
 UNKNOWN_AGE = AGES["monthly"]
 PITR = timedelta(days=7)
+PROTECT = timedelta(days=8)
+PARIS = ZoneInfo("Europe/Paris")
 # One full backup a day: the newest 8 reach back past 7 days. Keep in step with
 # repo1-retention-archive in nix/hosts/agenda/backup.nix.
 ARCHIVE_RETENTION_FULL = 8
@@ -54,37 +62,62 @@ def tier_for(today: date, existing: Iterable[BackupSet] | None = None) -> str:
         first = today.day == 1
     else:
         first = not any(
-            s.tier == "monthly" and (s.stop_time.year, s.stop_time.month) == (today.year, today.month) for s in existing
+            s.tier == "monthly" and (lambda t: (t.year, t.month))(s.stop_time.astimezone(PARIS)) == (today.year, today.month)
+            for s in existing
         )
     if first:
         return "monthly"
     return "weekly" if today.weekday() == 6 else "daily"
 
 
+def _base(ordered: list[BackupSet], now: datetime) -> BackupSet | None:
+    """The newest set that stopped before the PITR window opened: replay starts there."""
+    before = [s for s in ordered if s.stop_time <= now - PITR]
+    return before[-1] if before else None
+
+
 def sets_to_expire(sets: Iterable[BackupSet], now: datetime) -> list[str]:
     ordered = sorted(sets, key=lambda s: s.stop_time)
     protected = {s.label for s in ordered[-ARCHIVE_RETENTION_FULL:]}
+    protected |= {s.label for s in ordered if now - s.stop_time <= PROTECT}
+    if base := _base(ordered, now):
+        protected.add(base.label)
     return [
         s.label for s in ordered
         if s.label not in protected and now - s.stop_time > AGES.get(s.tier or "", UNKNOWN_AGE)
     ]
 
 
-def pitr_start(sets: Iterable[BackupSet]) -> datetime:
+def archive_retention(sets: Iterable[BackupSet], now: datetime) -> int:
+    """How many of the newest full sets keep their WAL: from the base on, at least
+    ARCHIVE_RETENTION_FULL."""
+    ordered = sorted(sets, key=lambda s: s.stop_time)
+    base = _base(ordered, now)
+    n = len(ordered) - ordered.index(base) if base else len(ordered)
+    return max(ARCHIVE_RETENTION_FULL, n)
+
+
+def pitr_start(sets: Iterable[BackupSet], now: datetime) -> datetime:
     """The earliest point in time recoverable: the stop of the oldest set whose WAL is kept."""
     ordered = sorted(sets, key=lambda s: s.stop_time)
-    return ordered[-ARCHIVE_RETENTION_FULL:][0].stop_time
+    return ordered[-min(archive_retention(ordered, now), len(ordered))].stop_time
 
 
-def simulate(days: Iterable[date]) -> list[tuple[date, list[BackupSet]]]:
-    """Back up, then expire, on each of `days` (the timers' order): the sets after each day."""
+def simulate(days: Iterable[date], extra_days: Iterable[date] = ()) -> list[tuple[date, list[BackupSet]]]:
+    """Back up at 01:30 Paris (and again at 14:00 on extra_days), then expire, on each of
+    `days`, as the timers do: the sets after each day."""
+    extra = set(extra_days)
     sets: list[BackupSet] = []
     history = []
     for day in days:
-        stop = datetime(day.year, day.month, day.day, 1, 30, tzinfo=UTC)
-        sets.append(BackupSet(f"{day:%Y%m%d}-013000F", tier_for(day, sets), stop))
-        gone = set(sets_to_expire(sets, stop + timedelta(hours=1)))
-        sets = [s for s in sets if s.label not in gone]
+        stops = [datetime(day.year, day.month, day.day, 1, 30, tzinfo=PARIS)]
+        if day in extra:
+            stops.append(datetime(day.year, day.month, day.day, 14, 0, tzinfo=PARIS))
+        for stop in stops:
+            stop = stop.astimezone(UTC)
+            sets.append(BackupSet(f"{stop:%Y%m%d-%H%M%S}F", tier_for(day, sets), stop))
+            gone = set(sets_to_expire(sets, stop + timedelta(hours=1)))
+            sets = [s for s in sets if s.label not in gone]
         history.append((day, list(sets)))
     return history
 
@@ -139,7 +172,9 @@ def run_backup(log: Callable[[str], None] = print) -> int:
     try:
         sets, _ = _info()
         tier = tier_for(_paris_today(), sets)
-        res = _pgbackrest("--type=full", f"--annotation=tier={tier}", "backup")
+        now = datetime.now(UTC)
+        keep = archive_retention([*sets, BackupSet("(this one)", tier, now)], now)
+        res = _pgbackrest("--type=full", f"--annotation=tier={tier}", f"--repo1-retention-archive={keep}", "backup")
         if res.returncode != 0:
             raise RuntimeError(_last_line(res))
         sets, raw = _info()
@@ -160,12 +195,19 @@ def run_expire(log: Callable[[str], None] = print) -> int:
     job = "pgbackrest-tier-expire"
     try:
         sets, _ = _info()
-        gone = sets_to_expire(sets, datetime.now(UTC))
+        now = datetime.now(UTC)
+        gone = sets_to_expire(sets, now)
+        keep = archive_retention([s for s in sets if s.label not in gone], now)
         for label in gone:
-            res = _pgbackrest(f"--set={label}", "expire")
+            res = _pgbackrest(f"--set={label}", f"--repo1-retention-archive={keep}", "expire")
             if res.returncode != 0:
                 raise RuntimeError(f"expire {label}: {_last_line(res)}")
-        summary = f"expired {len(gone)} set(s){': ' + ', '.join(gone) if gone else ''}; {len(sets) - len(gone)} kept"
+        # The WAL older than the base goes even when no set does.
+        res = _pgbackrest(f"--repo1-retention-archive={keep}", "expire")
+        if res.returncode != 0:
+            raise RuntimeError(f"expire WAL: {_last_line(res)}")
+        summary = (f"expired {len(gone)} set(s){': ' + ', '.join(gone) if gone else ''}; {len(sets) - len(gone)} kept, "
+                   f"WAL kept for the newest {keep}")
     except Exception as e:
         _record(job, "failed", f"tier expiry failed: {e}")
         log(f"tier expiry failed: {e}")
