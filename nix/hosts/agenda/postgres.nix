@@ -28,6 +28,10 @@ in
       local all all peer
     '';
     settings = {
+      # Unix socket only (/run/postgresql). enableTCPIP = false still listens on localhost:
+      # nothing uses TCP (the app, pgBackRest, the restore's temporary instance, the status
+      # report all go through sockets), so no port at all.
+      listen_addresses = lib.mkForce "";
       # Sized for 4 GB of RAM, shared with the ARC (1 GB) and gunicorn.
       shared_buffers = "512MB";
       effective_cache_size = "1536MB";
