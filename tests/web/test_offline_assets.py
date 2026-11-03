@@ -45,6 +45,19 @@ def test_pages_load_the_app_as_a_module_and_carry_its_hooks(client, small_geo) -
     assert 'data-page="agenda"' in html
 
 
+def test_stylesheet_assets_are_local_and_precached() -> None:
+    from posixpath import join, normpath
+
+    stylesheet = Path(finders.find("web/site.css")).read_text(encoding="utf-8")
+    assets = re.findall(r'url\("([^"]+)"\)', stylesheet)
+    assert assets
+    for asset in assets:
+        assert not asset.startswith(("https:", "http:", "data:", "//"))
+        name = normpath(join("web", asset))
+        assert finders.find(name), name
+        assert name in views.SW_ASSETS, name
+
+
 @pytest.mark.parametrize("case", FIXTURE["periods"], ids=lambda c: f"{c['period']}-{c['today']}")
 def test_period_choices_shared_with_the_offline_filter(case: dict) -> None:
     got = views.period_range(case["period"], date.fromisoformat(case["today"]))

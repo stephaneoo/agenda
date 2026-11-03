@@ -212,7 +212,11 @@ def healthz(request: HttpRequest) -> JsonResponse:
 
 # --- Offline (service worker) --------------------------------------------------------------
 
-SW_ASSETS = ["web/site.css", "web/app.js", "web/filter.js", "web/store.js"]
+SW_ASSETS = [
+    "web/site.css", "web/app.js", "web/filter.js", "web/store.js", "web/covers.png",
+    "web/fonts/space-grotesk-latin.woff2", "web/fonts/spectral-latin.woff2",
+    "web/fonts/spectral-italic-latin.woff2", "web/fonts/ibm-plex-mono-latin.woff2",
+]
 SW_REFERENCE = ["/api/v1/communes", "/api/v1/travel-times", "/api/v1/categories", "/api/v1/status"]
 
 

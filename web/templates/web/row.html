@@ -3,3 +3,4 @@
 <a class="title" href="{{ row.occ.get_absolute_url }}">{{ row.occ.event.name }}</a>
 <span class="commune">{{ row.occ.event.location.commune_name }}</span>{% if row.status_label %}
 <span class="status status-{{ row.occ.status }}">{{ row.status_label }}</span>{% endif %}
+<span class="cover" data-category="{{ row.occ.event.category }}" aria-hidden="true"></span>

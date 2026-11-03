@@ -1,6 +1,11 @@
 {% extends "web/base.html" %}
 {% block page %}agenda{% endblock %}
 {% block content %}
+<header class="masthead">
+  <h1>Agenda <em>autour de</em> <strong>Nyons</strong></h1>
+  <p class="edition">Culture, sorties &amp; rendez-vous locaux</p>
+</header>
+<div class="agenda-layout">
 <form class="filters" id="filters" method="get" action="/">
   <label>Commune
     <select name="commune">{% for insee, name in communes %}
@@ -44,5 +49,6 @@
   </ul>
 </details>
 {% endif %}
+</div>
 </div>
 {% endblock %}

@@ -113,7 +113,8 @@ function row(o, spanning, labels) {
     el("span", { class: "cat", text: labels.get(o.category) || o.category }),
     path ? el("a", { class: "title", href: path, text: o.name }) : el("span", { class: "title", text: o.name }),
     el("span", { class: "commune", text: o.location.commune_name }),
-    status ? el("span", { class: `status status-${o.status}`, text: status }) : null);
+    status ? el("span", { class: `status status-${o.status}`, text: status }) : null,
+    el("span", { class: "cover", "data-category": o.category, "aria-hidden": "true" }));
 }
 
 function section(title, rows) {
