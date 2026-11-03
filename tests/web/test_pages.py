@@ -90,6 +90,22 @@ def test_filters_work_without_js(client: Client) -> None:
     assert client.get("/?commune=75056&rayon=999&periode=x&categorie=nope").status_code == 200
 
 
+def test_agenda_row_shows_end_time_venue_and_price(client: Client) -> None:
+    import_event("datatourisme:row", name="Concert du soir", category="concert",
+                 dates=[dates_value(TODAY, "18:00", TODAY, "20:00")],
+                 loc=location(name="Salle des fêtes"),
+                 offers={"is_free": True, "price": None, "url": None})
+    html = client.get("/").content.decode()
+    assert '<div class="event-content">' in html
+    assert '<span class="time">18:00<small>&rarr; 20:00</small></span>' in html
+    assert '<span class="cat" data-category="concert">Concert</span>' in html
+    assert 'Nyons · Salle des fêtes</span>' in html
+    assert '<span class="price">Gratuit</span>' in html
+    assert 'aria-label="jeudi 5 novembre"' in html
+    assert '<span class="day-name">jeudi 5</span> <em>nov.</em>' in html
+    assert '<span class="day-count">1 événement</span>' in html
+
+
 def test_spanning_in_en_cours_group_once(client: Client) -> None:
     import_event("datatourisme:expo", name="Exposition d'automne", category="exposition",
                  dates=[dates_value(date(2026, 10, 1), None, date(2026, 12, 31))])

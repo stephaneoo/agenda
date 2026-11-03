@@ -26,6 +26,8 @@ const ORIGINS = new Set([location.origin, SITE_ORIGIN].filter(Boolean));
 
 const fmt = (options) => new Intl.DateTimeFormat("fr-FR", { timeZone: TZ, ...options });
 const DAY_HEADING = fmt({ weekday: "long", day: "numeric", month: "long" });
+const DAY_NAME = fmt({ weekday: "long", day: "numeric" });
+const SHORT_MONTH = fmt({ month: "short" });
 const SHORT_DAY = fmt({ day: "numeric", month: "short" });
 const LONG_DATE = fmt({ weekday: "long", day: "numeric", month: "long", year: "numeric" });
 const HOUR = fmt({ hour: "2-digit", minute: "2-digit" });
@@ -108,24 +110,36 @@ function row(o, spanning, labels) {
   else if (hasTime(o.start)) time = HOUR.format(new Date(o.start));
   const path = pathOf(o.url, ORIGINS);
   const status = statusLabel(o.status);
+  const endTime = !spanning && o.end && hasTime(o.end) ? HOUR.format(new Date(o.end)) : null;
+  const place = [o.location.commune_name, o.location.name].filter(Boolean).join(" · ");
+  const price = o.offers?.is_free ? "Gratuit" : o.offers?.price;
   return el("li", {},
-    el("span", { class: "time", text: time }),
-    el("span", { class: "cat", text: labels.get(o.category) || o.category }),
-    path ? el("a", { class: "title", href: path, text: o.name }) : el("span", { class: "title", text: o.name }),
-    el("span", { class: "commune", text: o.location.commune_name }),
-    status ? el("span", { class: `status status-${o.status}`, text: status }) : null,
+    el("span", { class: "time", text: time }, endTime ? el("small", { text: `→ ${endTime}` }) : null),
+    el("div", { class: "event-content" },
+      el("span", { class: "cat", "data-category": o.category, text: labels.get(o.category) || o.category }),
+      path ? el("a", { class: "title", href: path, text: o.name }) : el("span", { class: "title", text: o.name }),
+      el("p", { class: "event-meta" }, el("span", { class: "commune", text: place }),
+        price ? el("span", { class: "price", text: price }) : null),
+      status ? el("span", { class: `status status-${o.status}`, text: status }) : null),
     el("span", { class: "cover", "data-category": o.category, "aria-hidden": "true" }));
 }
 
-function section(title, rows) {
-  return el("section", { class: "day" }, el("h2", { text: title }), el("ul", { class: "rows" }, ...rows));
+function section(day, rows) {
+  const date = asDay(day);
+  return el("section", { class: "day" },
+    el("div", { class: "day-heading" },
+      el("h2", { "aria-label": DAY_HEADING.format(date) },
+        el("span", { class: "day-name", text: DAY_NAME.format(date) }), " ",
+        el("em", { text: SHORT_MONTH.format(date) })),
+      el("span", { class: "day-count", text: `${rows.length} événement${rows.length > 1 ? "s" : ""}` })),
+    el("ul", { class: "rows" }, ...rows));
 }
 
 function renderList(results, occs, from, labels) {
   const { ongoing, days } = groupForList(occs, from);
   const parts = [];
   if (!occs.length) parts.push(el("p", { class: "empty", text: "Aucun événement pour ces critères." }));
-  for (const d of days) parts.push(section(DAY_HEADING.format(asDay(d.day)), d.rows.map((o) => row(o, false, labels))));
+  for (const d of days) parts.push(section(d.day, d.rows.map((o) => row(o, false, labels))));
   // As the server renders it: after the days, collapsed.
   if (ongoing.length) {
     parts.push(el("details", { class: "ongoing" },

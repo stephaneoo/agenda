@@ -20,11 +20,25 @@
   src: url("fonts/spectral-italic-latin.woff2") format("woff2");
 }
 @font-face {
+  font-family: "Spectral";
+  font-style: italic;
+  font-weight: 300;
+  font-display: swap;
+  src: url("fonts/spectral-light-italic-latin.woff2") format("woff2");
+}
+@font-face {
   font-family: "IBM Plex Mono";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
   src: url("fonts/ibm-plex-mono-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-medium-latin.woff2") format("woff2");
 }
 :root {
   --fg: #24231e;
@@ -83,26 +97,36 @@ h1 { font-size: 2.5rem; }
 .categories input { margin: 0; width: 12px; height: 12px; flex-shrink: 0; accent-color: var(--accent); }
 #results { min-width: 0; }
 .day + .day { margin-top: 34px; }
-.day h2 { font-size: 2.3rem; font-weight: 500; margin: 0 0 12px; text-transform: capitalize; }
+.day-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; margin-bottom: 4px; }
+.day h2 { min-width: 0; font-size: 3.1rem; line-height: 1; font-weight: 500; margin: 0; text-shadow: 1.5px 1px 0 rgba(201, 72, 26, .22); }
+.day-name { text-transform: capitalize; padding-bottom: .04em; background: linear-gradient(var(--accent), var(--accent)) no-repeat 0 94% / 100% .09em; }
+.day h2 em { font-weight: 300; font-style: normal; color: var(--muted); }
+.day-count { margin-left: auto; color: var(--muted); font: .74rem/1.5 var(--mono); white-space: nowrap; }
 .rows { list-style: none; margin: 0; padding: 0; }
-.rows li { display: grid; grid-template-columns: 88px minmax(0, 1fr) 92px; gap: 7px 16px; position: relative; padding: 18px 0; border-top: 1px solid var(--line); align-items: start; }
+.rows li { display: grid; grid-template-columns: 88px minmax(0, 1fr) 92px; gap: 16px; position: relative; padding: 16px 0; border-top: 1px solid var(--line); align-items: start; }
 .rows li:last-child { border-bottom: 1px solid var(--line); }
-.cover { grid-column: 3; grid-row: 1 / span 4; width: 92px; height: 92px; border: 1px solid var(--line); background: var(--paper-2) url("covers.png") 100% 0 / 1100% 100% no-repeat; image-rendering: pixelated; }
-.cover[data-category="concert"] { background-position-x: 0%; }
-.cover[data-category="spectacle"] { background-position-x: 10%; }
-.cover[data-category="cinema"] { background-position-x: 20%; }
-.cover[data-category="exposition"] { background-position-x: 30%; }
-.cover[data-category="marche"] { background-position-x: 40%; }
-.cover[data-category="brocante"] { background-position-x: 50%; }
-.cover[data-category="fete"] { background-position-x: 60%; }
-.cover[data-category="sport-balade"] { background-position-x: 70%; }
-.cover[data-category="atelier-conference"] { background-position-x: 80%; }
-.cover[data-category="loto-jeux"] { background-position-x: 90%; }
-.time { grid-column: 1; grid-row: 1 / span 4; font: 500 1.1rem/1.4 var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.title { grid-column: 2; grid-row: 2; font: 500 1.3rem/1.2 var(--grot); text-decoration: none; overflow-wrap: anywhere; }
-.cat { grid-column: 2; grid-row: 1; justify-self: start; color: var(--accent); font: .65rem/1.5 var(--mono); text-transform: uppercase; }
-.commune { grid-column: 2; grid-row: 3; color: var(--muted); font: .75rem/1.5 var(--mono); overflow-wrap: anywhere; }
-.status { grid-column: 2; color: var(--warn); font: 500 .8rem/1.5 var(--mono); }
+.event-content { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.cover { grid-column: 3; grid-row: 1; width: 92px; height: 92px; border: 1px solid var(--line); background: var(--paper-2) url("covers.png") var(--category-position, 100%) 0 / 1100% 100% no-repeat; image-rendering: pixelated; }
+[data-category="concert"] { --category-position: 0%; }
+[data-category="spectacle"] { --category-position: 10%; }
+[data-category="cinema"] { --category-position: 20%; }
+[data-category="exposition"] { --category-position: 30%; }
+[data-category="marche"] { --category-position: 40%; }
+[data-category="brocante"] { --category-position: 50%; }
+[data-category="fete"] { --category-position: 60%; }
+[data-category="sport-balade"] { --category-position: 70%; }
+[data-category="atelier-conference"] { --category-position: 80%; }
+[data-category="loto-jeux"] { --category-position: 90%; }
+.time { grid-column: 1; grid-row: 1; padding-top: 3px; font: 500 1.18rem/1.2 var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.time small { display: block; color: var(--muted); font-size: .7rem; font-weight: 400; margin-top: 3px; }
+.title { font: 500 1.65rem/1.12 var(--grot); text-decoration: none; overflow-wrap: anywhere; text-wrap: balance; }
+.rows li:hover .title, .title:focus-visible { text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 2px; }
+.cat { display: flex; align-items: center; gap: 7px; color: #7a7d5c; font: 500 .66rem/1.2 var(--mono); text-transform: uppercase; }
+.cat::before { content: ""; flex: none; width: 12px; height: 12px; background: url("category-icons.png") var(--category-position, 100%) 0 / 1100% 100% no-repeat; image-rendering: pixelated; }
+.event-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 0; color: var(--muted); font: .74rem/1.5 var(--mono); }
+.commune { overflow-wrap: anywhere; }
+.price { color: var(--fg); font-weight: 500; }
+.status { align-self: flex-start; color: var(--warn); font: 500 .8rem/1.5 var(--mono); }
 .empty { color: var(--muted); padding: 1rem 0; border-block: 1px solid var(--line); }
 .notice { color: var(--warn); font-weight: 600; }
 .over { color: var(--warn); font-weight: 600; }
@@ -136,11 +160,11 @@ h1 { font-size: 2.5rem; }
   .masthead h1 strong { text-decoration-thickness: 3px; text-underline-offset: 6px; }
   .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filters > label:first-child { grid-column: 1 / -1; }
-  .day h2 { font-size: 1.8rem; }
-  .rows li { grid-template-columns: 62px minmax(0, 1fr) 64px; gap: 6px 12px; }
+  .day h2 { font-size: 2rem; }
+  .rows li { grid-template-columns: 62px minmax(0, 1fr) 64px; gap: 12px; }
   .cover { width: 64px; height: 64px; }
-  .time { font-size: .9rem; }
-  .title { font-size: 1.15rem; }
+  .time { font-size: 1rem; }
+  .title { font-size: 1.25rem; }
   h1, .occurrence h1 { font-size: 2.2rem; }
   .occurrence dl { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .occurrence dd + dt { margin-top: 12px; }

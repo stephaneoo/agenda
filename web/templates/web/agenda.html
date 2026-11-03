@@ -34,7 +34,10 @@
 
 {% for day in days %}
 <section class="day">
-  <h2>{{ day.day|date:"l j F" }}</h2>
+  <div class="day-heading">
+    <h2 aria-label="{{ day.day|date:'l j F' }}"><span class="day-name">{{ day.day|date:"l j" }}</span> <em>{{ day.day|date:"N"|lower }}</em></h2>
+    <span class="day-count">{{ day.rows|length }} événement{{ day.rows|length|pluralize }}</span>
+  </div>
   <ul class="rows">{% for row in day.rows %}
     <li>{% include "web/row.html" %}</li>{% endfor %}
   </ul>
