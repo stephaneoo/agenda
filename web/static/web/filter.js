@@ -155,6 +155,12 @@ export function filterOccurrences(occs, matrix, query, context = {}) {
 
 // --- The agenda page's choices and grouping (web.views) --------------------------------------
 
+export function matchesSearch(occurrence, query) {
+  const normalize = (value) => value.toLowerCase().normalize("NFD").replace(/\p{Mn}/gu, "");
+  const text = normalize([occurrence.name, occurrence.location?.name, occurrence.location?.commune_name].filter(Boolean).join(" "));
+  return normalize(query.slice(0, 300)).split(/\s+/).filter(Boolean).every((term) => text.includes(term));
+}
+
 export function periodRange(period, today) {
   if (period === "aujourdhui") return { from: today, to: today };
   if (period === "week-end") {

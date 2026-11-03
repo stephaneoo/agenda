@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
 from datetime import date, datetime, time, timedelta
@@ -121,6 +122,12 @@ def agenda(request: HttpRequest) -> HttpResponse:
     period = request.GET.get("periode", DEFAULT_PERIOD)
     period = period if period in PERIODS else DEFAULT_PERIOD
     categories = [c for c in request.GET.getlist("categorie") if c in SLUGS]
+    toggled = request.GET.get("toggle_category")
+    if toggled in SLUGS:
+        if toggled in categories:
+            categories = [category for category in categories if category != toggled]
+        else:
+            categories.append(toggled)
     date_from, date_to = period_range(period, today())
 
     items: list[Occurrence] = []
@@ -134,12 +141,22 @@ def agenda(request: HttpRequest) -> HttpResponse:
                 break
         truncated = cursor is not None
 
+    query = request.GET.get("q", "")[:300].strip()
+    if query:
+        def normalized(value: str) -> str:
+            return "".join(char for char in unicodedata.normalize("NFD", value.lower()) if unicodedata.category(char) != "Mn")
+
+        terms = normalized(query).split()
+        items = [occ for occ in items if all(term in normalized(" ".join([
+            occ.event.name, occ.event.location.get("name") or "", occ.event.location.get("commune_name") or "",
+        ])) for term in terms)]
+
     ongoing, days = group_rows(items, date_from)
     return render(request, "web/agenda.html", {
         "communes": communes, "commune": commune, "radii": RADII, "radius": radius,
         "periods": PERIODS, "period": period, "categories": SLUGS, "selected_categories": categories,
         "ongoing": ongoing, "days": days, "count": len(items),
-        "truncated": truncated,
+        "truncated": truncated, "query": query,
     })
 
 
@@ -213,7 +230,7 @@ def healthz(request: HttpRequest) -> JsonResponse:
 # --- Offline (service worker) --------------------------------------------------------------
 
 SW_ASSETS = [
-    "web/site.css", "web/app.js", "web/filter.js", "web/store.js", "web/covers.png", "web/category-icons.png",
+    "web/site.css", "web/app.js", "web/filter.js", "web/store.js", "web/weather.js", "web/weather-icons.png", "web/covers.png", "web/category-icons.png",
     "web/fonts/space-grotesk-latin.woff2", "web/fonts/spectral-latin.woff2",
     "web/fonts/spectral-italic-latin.woff2", "web/fonts/ibm-plex-mono-latin.woff2",
     "web/fonts/spectral-light-italic-latin.woff2", "web/fonts/ibm-plex-mono-medium-latin.woff2",

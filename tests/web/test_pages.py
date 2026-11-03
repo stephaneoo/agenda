@@ -75,6 +75,53 @@ def test_agenda_defaults_nyons_30min_7days(client: Client) -> None:
     assert '<html lang="fr">' in html
 
 
+def test_header_uses_mockup_brand_and_masthead(client: Client) -> None:
+    html = client.get("/").content.decode()
+    assert '<div class="site-inner">' in html
+    assert '<b>Agenda</b></a>' in html
+    assert '<div class="header-meta" aria-label="Date, position et météo de Nyons">' in html
+    assert 'id="weather" class="weather"' in html
+    assert '44.360&deg;N 5.141&deg;E' in html
+    assert '<a class="mast-city" href="#commune" aria-label="Choisir une commune">' in html
+    assert '<span class="mast-name">Nyons</span>' in html
+    assert '<select id="commune" name="commune">' in html
+    assert 'Culture, sorties &amp; rendez-vous locaux' not in html
+
+
+def test_quick_category_tags_toggle_without_js(client: Client) -> None:
+    event("datatourisme:concert", TODAY, name="Concert local", category="concert")
+    event("datatourisme:marche", TODAY, name="Marché local", category="marche")
+    html = client.get("/?toggle_category=concert").content.decode()
+    assert titles(html) == ["Concert local"]
+    assert 'data-category-toggle="concert" aria-pressed="true"' in html
+    assert html.count('name="toggle_category"') == 11
+    html = client.get("/?categorie=concert&toggle_category=concert").content.decode()
+    assert sorted(titles(html)) == ["Concert local", "Marché local"]
+
+
+def test_search_matches_title_and_place_without_js(client: Client) -> None:
+    event("datatourisme:concert", TODAY, name="Soirée jazz", category="concert", loc=location("26220", "Nyons", "26110", name="Théâtre"))
+    event("datatourisme:marche", TODAY, name="Marché local", category="marche")
+    html = client.get("/", {"q": "SOIREE theatre"}).content.decode()
+    assert titles(html) == ["Soirée jazz"]
+    assert 'id="search-panel"' in html
+    assert 'name="q" value="SOIREE theatre"' in html
+    assert 'id="header-query"' not in html
+    assert 'aria-label="Ouvrir le panneau de recherche"' in html
+    assert '<span class="panel-symbol" aria-hidden="true">&#9776;</span>' in html
+    assert '<span class="panel-symbol" aria-hidden="true">&times;</span>' in html
+    assert '<use ' not in html
+    sidebar = re.search(r'<dialog\b[^>]*id="search-panel"[^>]*>.*?</dialog>', html, re.DOTALL)
+    assert sidebar is not None
+    assert 'id="filters"' in sidebar.group()
+    assert 'id="panel-query"' in sidebar.group()
+    outside_sidebar = html[:sidebar.start()] + html[sidebar.end():]
+    assert '<form' not in outside_sidebar
+    assert 'type="search"' not in outside_sidebar
+    assert 'id="filter-home"' not in html
+    assert titles(client.get("/?q=introuvable").content.decode()) == []
+
+
 def test_filters_work_without_js(client: Client) -> None:
     event("datatourisme:nyons", TODAY, name="Marché de Nyons")
     event("datatourisme:mirabel", TODAY, "11:00", name="Concert à Mirabel", category="concert",

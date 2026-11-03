@@ -1,6 +1,7 @@
 """Content-Security-Policy on every response.
 
-The public pages load only their own files: no inline script or style (the JSON-LD block is
+The public pages load their own files and fetch Nyons forecasts from Open-Meteo.
+There is no inline script or style (the JSON-LD block is
 data, which CSP doesn't execute), no frames, no plugins. worker-src and manifest-src are for
 the service worker and the web manifest of Task 12.
 
@@ -21,7 +22,7 @@ POLICY = "; ".join([
     "style-src 'self'",
     "img-src 'self'",
     "font-src 'self'",
-    "connect-src 'self'",
+    "connect-src 'self' https://api.open-meteo.com",
     "worker-src 'self'",
     "manifest-src 'self'",
     "form-action 'self'",

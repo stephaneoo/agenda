@@ -35,7 +35,7 @@ def test_public_policy_is_strict() -> None:
     assert directives == {
         "default-src": "'none'", "script-src": "'self'", "style-src": "'self'", "img-src": "'self'",
         "font-src": "'self'",
-        "connect-src": "'self'", "worker-src": "'self'", "manifest-src": "'self'", "form-action": "'self'",
+        "connect-src": "'self' https://api.open-meteo.com", "worker-src": "'self'", "manifest-src": "'self'", "form-action": "'self'",
         "frame-ancestors": "'none'", "base-uri": "'none'",
     }
 

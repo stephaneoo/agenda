@@ -1,33 +1,14 @@
 {% extends "web/base.html" %}
 {% block page %}agenda{% endblock %}
+{% block search_button %}<button class="panel-toggle" type="button" data-open-search command="show-modal" commandfor="search-panel" aria-controls="search-panel" aria-haspopup="dialog" aria-label="Ouvrir le panneau de recherche" title="Chercher et filtrer"><span class="panel-symbol" aria-hidden="true">&#9776;</span></button>{% endblock %}
 {% block content %}
 <header class="masthead">
-  <h1>Agenda <em>autour de</em> <strong>Nyons</strong></h1>
-  <p class="edition">Culture, sorties &amp; rendez-vous locaux</p>
+  <h1><span class="mast-line"><span>Agenda</span> <em>autour de</em></span><a class="mast-city" href="#commune" aria-label="Choisir une commune"><span class="mast-name">Nyons</span></a></h1>
 </header>
+<nav class="quick-tags" aria-label="Filtrer par catégorie">
+  {% for slug, label in categories.items %}<button class="quick-tag" type="submit" form="filters" name="toggle_category" value="{{ slug }}" data-category-toggle="{{ slug }}" aria-pressed="{% if slug in selected_categories %}true{% else %}false{% endif %}"><span class="cat" data-category="{{ slug }}">{{ label }}</span></button>{% endfor %}
+</nav>
 <div class="agenda-layout">
-<form class="filters" id="filters" method="get" action="/">
-  <label>Commune
-    <select name="commune">{% for insee, name in communes %}
-      <option value="{{ insee }}"{% if insee == commune %} selected{% endif %}>{{ name }}</option>{% endfor %}
-    </select>
-  </label>
-  <label>Rayon
-    <select name="rayon">{% for r in radii %}
-      <option value="{{ r }}"{% if r == radius %} selected{% endif %}>{% if r == 0 %}cette commune{% else %}{{ r }} min{% endif %}</option>{% endfor %}
-    </select>
-  </label>
-  <label>Dates
-    <select name="periode">{% for value, label in periods.items %}
-      <option value="{{ value }}"{% if value == period %} selected{% endif %}>{{ label }}</option>{% endfor %}
-    </select>
-  </label>
-  <fieldset class="categories"><legend>Catégories</legend>{% for slug, label in categories.items %}
-    <label><input type="checkbox" name="categorie" value="{{ slug }}"{% if slug in selected_categories %} checked{% endif %}> {{ label }}</label>{% endfor %}
-  </fieldset>
-  <button type="submit">Filtrer</button>
-</form>
-
 <div id="results">
 {% if truncated %}<p class="notice">Liste tronquée : seuls les {{ count }} premiers événements sont affichés. Réduisez le rayon, les dates ou les catégories.</p>{% endif %}
 {% if not count %}<p class="empty">Aucun événement pour ces critères.</p>{% endif %}
@@ -54,4 +35,35 @@
 {% endif %}
 </div>
 </div>
+<dialog class="search-panel" id="search-panel" aria-labelledby="search-title">
+  <div class="panel-heading"><h2 id="search-title">Chercher</h2><button class="panel-close" type="button" data-close-search command="close" commandfor="search-panel" aria-label="Fermer le panneau" title="Fermer"><span class="panel-symbol" aria-hidden="true">&times;</span></button></div>
+  <p id="search-count" class="search-count" role="status">{{ count }} événement{{ count|pluralize }}</p>
+  <div id="panel-filters">
+    <form class="filters" id="filters" method="get" action="/">
+      <label class="panel-query">Chercher
+        <input id="panel-query" type="search" name="q" value="{{ query }}" placeholder="Titre, lieu…" maxlength="300" autocomplete="off">
+      </label>
+      <label>Commune
+        <select id="commune" name="commune">{% for insee, name in communes %}
+          <option value="{{ insee }}"{% if insee == commune %} selected{% endif %}>{{ name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Rayon
+        <select name="rayon">{% for r in radii %}
+          <option value="{{ r }}"{% if r == radius %} selected{% endif %}>{% if r == 0 %}cette commune{% else %}{{ r }} min{% endif %}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Dates
+        <select name="periode">{% for value, label in periods.items %}
+          <option value="{{ value }}"{% if value == period %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+      </label>
+      <fieldset class="categories"><legend>Catégories</legend>{% for slug, label in categories.items %}
+        <label><input type="checkbox" name="categorie" value="{{ slug }}"{% if slug in selected_categories %} checked{% endif %}> {{ label }}</label>{% endfor %}
+      </fieldset>
+      <button type="submit">Filtrer</button>
+    </form>
+  </div>
+  <a class="reset-filters" href="/">Tout effacer</a>
+</dialog>
 {% endblock %}

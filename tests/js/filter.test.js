@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { InvalidQuery, filterOccurrences, groupForList, isSpanning, parisToday, periodRange } from "../../web/static/web/filter.js";
+import { InvalidQuery, filterOccurrences, groupForList, isSpanning, matchesSearch, parisToday, periodRange } from "../../web/static/web/filter.js";
 
 const fixture = JSON.parse(readFileSync(new URL("../fixtures/filter-cases.json", import.meta.url), "utf8"));
 // As GET /api/v1/occurrences serves them (only the fields the filter reads, plus name).
@@ -34,6 +34,14 @@ for (const c of fixture.cases) {
     }
   });
 }
+
+test("text search matches title and place without case or accents", () => {
+  const occurrence = { name: "Soirée jazz", location: { name: "Théâtre", commune_name: "Nyons" } };
+  assert.equal(matchesSearch(occurrence, " SOIREE theatre "), true);
+  assert.equal(matchesSearch(occurrence, "NYONS jazz"), true);
+  assert.equal(matchesSearch(occurrence, "introuvable"), false);
+  assert.equal(matchesSearch(occurrence, ""), true);
+});
 
 test("period choices give the same dates as the server", () => {
   for (const p of fixture.periods) {

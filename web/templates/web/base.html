@@ -12,8 +12,15 @@
 </head>
 <body data-page="{% block page %}{% endblock %}">
 <header class="site">
-  <a class="brand" href="/" aria-label="Agenda autour de Nyons"><b>Agenda</b> <i>autour de Nyons</i></a>
-  <nav aria-label="Navigation principale"><a href="/">Agenda</a><a href="/a-propos/">À propos</a></nav>
+  <div class="site-inner">
+    <a class="brand" href="/" aria-label="Agenda autour de Nyons"><b>Agenda</b></a>
+    <div class="header-meta" aria-label="Date, position et météo de Nyons">
+      <span>{% now "D" %}. {% now "d.m.Y" %}</span>
+      <span>44.360&deg;N 5.141&deg;E · 271 m</span>
+      <a id="weather" class="weather" href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer" title="Prévisions Nyons · Open-Meteo">Météo indisponible</a>
+    </div>
+    <nav aria-label="Navigation principale"><a href="/a-propos/">À propos</a>{% block search_button %}{% endblock %}</nav>
+  </div>
 </header>
 <p id="offline-banner" class="banner" role="status" hidden></p>
 <main>
