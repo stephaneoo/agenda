@@ -24,3 +24,4 @@ secrets/*.plain*
 .terraform/
 *.tfplan
 crash.log
+.DS_Store
