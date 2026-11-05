@@ -1,5 +1,8 @@
-<span class="time">{% if spanning %}jusqu'au {{ row.end|date:"j M" }}{% elif row.has_time %}{{ row.start|date:"H:i" }}{% else %}journée{% endif %}</span>
-<span class="cat">{{ row.category_label }}</span>
-<a class="title" href="{{ row.occ.get_absolute_url }}">{{ row.occ.event.name }}</a>
-<span class="commune">{{ row.occ.event.location.commune_name }}</span>{% if row.status_label %}
-<span class="status status-{{ row.occ.status }}">{{ row.status_label }}</span>{% endif %}
+<span class="time">{% if spanning %}jusqu'au {{ row.end|date:"j M" }}{% elif row.has_time %}{{ row.start|date:"H:i" }}{% else %}journée{% endif %}{% if not spanning and row.end_has_time %}<small>&rarr; {{ row.end|date:"H:i" }}</small>{% endif %}</span>
+<div class="event-content">
+	<span class="cat" data-category="{{ row.occ.event.category }}">{{ row.category_label }}</span>
+	<a class="title" href="{{ row.occ.get_absolute_url }}">{{ row.occ.event.name }}</a>
+	<p class="event-meta"><span class="commune">{{ row.occ.event.location.commune_name }}{% if row.occ.event.location.name %} · {{ row.occ.event.location.name }}{% endif %}</span>{% if row.occ.event.offers %}{% if row.occ.event.offers.is_free %}<span class="price">Gratuit</span>{% elif row.occ.event.offers.price %}<span class="price">{{ row.occ.event.offers.price }}</span>{% endif %}{% endif %}</p>
+	{% if row.status_label %}<span class="status status-{{ row.occ.status }}">{{ row.status_label }}</span>{% endif %}
+</div>
+<span class="cover" data-category="{{ row.occ.event.category }}" aria-hidden="true"></span>

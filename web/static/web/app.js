@@ -11,9 +11,10 @@
 // its caches, register nothing.
 
 import {
-  InvalidQuery, addDays, categoryLabels, filterOccurrences, groupForList, parisToday, pathOf, periodRange, statusLabel,
+  InvalidQuery, addDays, categoryLabels, filterOccurrences, groupForList, matchesSearch, parisToday, pathOf, periodRange, statusLabel,
 } from "./filter.js";
 import { bannerText, evictPages, isFresh, loadSnapshot, saveSnapshot } from "./store.js";
+import { loadWeather } from "./weather.js";
 
 const API = "/api/v1";
 const SPAN_DAYS = 30;
@@ -26,6 +27,8 @@ const ORIGINS = new Set([location.origin, SITE_ORIGIN].filter(Boolean));
 
 const fmt = (options) => new Intl.DateTimeFormat("fr-FR", { timeZone: TZ, ...options });
 const DAY_HEADING = fmt({ weekday: "long", day: "numeric", month: "long" });
+const DAY_NAME = fmt({ weekday: "long", day: "numeric" });
+const SHORT_MONTH = fmt({ month: "short" });
 const SHORT_DAY = fmt({ day: "numeric", month: "short" });
 const LONG_DATE = fmt({ weekday: "long", day: "numeric", month: "long", year: "numeric" });
 const HOUR = fmt({ hour: "2-digit", minute: "2-digit" });
@@ -108,23 +111,36 @@ function row(o, spanning, labels) {
   else if (hasTime(o.start)) time = HOUR.format(new Date(o.start));
   const path = pathOf(o.url, ORIGINS);
   const status = statusLabel(o.status);
+  const endTime = !spanning && o.end && hasTime(o.end) ? HOUR.format(new Date(o.end)) : null;
+  const place = [o.location.commune_name, o.location.name].filter(Boolean).join(" · ");
+  const price = o.offers?.is_free ? "Gratuit" : o.offers?.price;
   return el("li", {},
-    el("span", { class: "time", text: time }),
-    el("span", { class: "cat", text: labels.get(o.category) || o.category }),
-    path ? el("a", { class: "title", href: path, text: o.name }) : el("span", { class: "title", text: o.name }),
-    el("span", { class: "commune", text: o.location.commune_name }),
-    status ? el("span", { class: `status status-${o.status}`, text: status }) : null);
+    el("span", { class: "time", text: time }, endTime ? el("small", { text: `→ ${endTime}` }) : null),
+    el("div", { class: "event-content" },
+      el("span", { class: "cat", "data-category": o.category, text: labels.get(o.category) || o.category }),
+      path ? el("a", { class: "title", href: path, text: o.name }) : el("span", { class: "title", text: o.name }),
+      el("p", { class: "event-meta" }, el("span", { class: "commune", text: place }),
+        price ? el("span", { class: "price", text: price }) : null),
+      status ? el("span", { class: `status status-${o.status}`, text: status }) : null),
+    el("span", { class: "cover", "data-category": o.category, "aria-hidden": "true" }));
 }
 
-function section(title, rows) {
-  return el("section", { class: "day" }, el("h2", { text: title }), el("ul", { class: "rows" }, ...rows));
+function section(day, rows) {
+  const date = asDay(day);
+  return el("section", { class: "day" },
+    el("div", { class: "day-heading" },
+      el("h2", { "aria-label": DAY_HEADING.format(date) },
+        el("span", { class: "day-name", text: DAY_NAME.format(date) }), " ",
+        el("em", { text: SHORT_MONTH.format(date) })),
+      el("span", { class: "day-count", text: `${rows.length} événement${rows.length > 1 ? "s" : ""}` })),
+    el("ul", { class: "rows" }, ...rows));
 }
 
 function renderList(results, occs, from, labels) {
   const { ongoing, days } = groupForList(occs, from);
   const parts = [];
   if (!occs.length) parts.push(el("p", { class: "empty", text: "Aucun événement pour ces critères." }));
-  for (const d of days) parts.push(section(DAY_HEADING.format(asDay(d.day)), d.rows.map((o) => row(o, false, labels))));
+  for (const d of days) parts.push(section(d.day, d.rows.map((o) => row(o, false, labels))));
   // As the server renders it: after the days, collapsed.
   if (ongoing.length) {
     parts.push(el("details", { class: "ongoing" },
@@ -141,6 +157,7 @@ function readForm(form) {
     within: data.get("rayon") === null ? null : Number(data.get("rayon")),
     period: data.get("periode") || "7j",
     categories: data.getAll("categorie"),
+    query: data.get("q") || "",
   };
 }
 
@@ -153,10 +170,55 @@ function applyUrl(form) {
       select.value = params.get(name);
     }
   }
-  if (params.has("categorie")) {
-    const wanted = new Set(params.getAll("categorie"));
-    for (const box of form.querySelectorAll('input[name="categorie"]')) box.checked = wanted.has(box.value);
+  const wanted = new Set(params.getAll("categorie"));
+  const toggled = params.get("toggle_category");
+  if (toggled) wanted.has(toggled) ? wanted.delete(toggled) : wanted.add(toggled);
+  for (const box of form.querySelectorAll('input[name="categorie"]')) box.checked = wanted.has(box.value);
+  form.elements.q.value = (params.get("q") || "").slice(0, 300);
+}
+
+function setupSearchPanel() {
+  const form = document.getElementById("filters");
+  const panel = document.getElementById("search-panel");
+  if (!form || !panel) return;
+  const panelQuery = document.getElementById("panel-query");
+  const open = (target = panelQuery) => {
+    if (!panel.open) panel.showModal();
+    target.focus();
+  };
+  for (const button of document.querySelectorAll("[data-open-search]")) {
+    button.hidden = false;
+    button.addEventListener("click", () => open());
   }
+  panel.querySelector("[data-close-search]").addEventListener("click", () => panel.close());
+  panel.addEventListener("click", (event) => {
+    const bounds = panel.getBoundingClientRect();
+    if (event.target === panel && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom)) panel.close();
+  });
+  const city = document.querySelector(".mast-city");
+  city?.addEventListener("click", (event) => {
+    event.preventDefault();
+    open(document.getElementById("commune"));
+  });
+  panelQuery.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      panel.close();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  panel.querySelector(".reset-filters").addEventListener("click", (event) => {
+    if (!form.dataset.enhanced) return;
+    event.preventDefault();
+    form.elements.commune.value = "26220";
+    form.elements.rayon.value = "30";
+    form.elements.periode.value = "7j";
+    for (const box of form.querySelectorAll('input[name="categorie"]')) box.checked = false;
+    panelQuery.value = "";
+    form.dispatchEvent(new Event("change"));
+  });
 }
 
 function enhanceAgenda(state, offline) {
@@ -171,17 +233,29 @@ function enhanceAgenda(state, offline) {
     let occs;
     try {
       occs = filterOccurrences(state.snapshot.occurrences, state.matrix,
-        { commune: f.commune, within: f.within, from, to, categories: f.categories }, { slugs });
+        { commune: f.commune, within: f.within, from, to, categories: f.categories }, { slugs })
+        .filter((occurrence) => matchesSearch(occurrence, f.query));
     } catch (e) {
       if (e instanceof InvalidQuery && !offline) form.submit(); // let the server answer
       return;
     }
     renderList(results, occs, from, labels);
+    document.getElementById("panel-query").value = f.query;
+    document.getElementById("search-count").textContent = `${occs.length} événement${occs.length > 1 ? "s" : ""} · ${form.elements.periode.selectedOptions[0].textContent}`;
+    for (const button of document.querySelectorAll("[data-category-toggle]")) {
+      button.setAttribute("aria-pressed", String(f.categories.includes(button.dataset.categoryToggle)));
+    }
     if (replaceUrl) history.replaceState(null, "", `/?${new URLSearchParams(new FormData(form))}`);
   };
+  form.dataset.enhanced = "true";
+  form.addEventListener("input", () => update(true));
   form.addEventListener("change", () => update(true));
   form.addEventListener("submit", (event) => {
     event.preventDefault();
+    if (event.submitter?.name === "toggle_category") {
+      const box = [...form.querySelectorAll('input[name="categorie"]')].find((input) => input.value === event.submitter.value);
+      if (box) box.checked = !box.checked;
+    }
     update(true);
   });
   if (offline) {
@@ -232,6 +306,19 @@ async function killWorker() {
 }
 
 async function main() {
+  setupSearchPanel();
+  void loadWeather();
+  globalThis.addEventListener("online", () => { void loadWeather(); });
+  const header = document.querySelector("header.site");
+  const tags = document.querySelector(".quick-tags");
+  if (header && "ResizeObserver" in globalThis) {
+    const observer = new ResizeObserver(() => {
+      document.documentElement.style.setProperty("--header-height", `${header.getBoundingClientRect().height}px`);
+      if (tags) document.documentElement.style.setProperty("--quick-tags-height", `${tags.getBoundingClientRect().height}px`);
+    });
+    observer.observe(header);
+    if (tags) observer.observe(tags);
+  }
   if ("serviceWorker" in navigator) {
     if (meta("agenda-sw") === "kill") await killWorker();
     else if (SITE_ORIGIN && SITE_ORIGIN === location.origin) navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});

@@ -182,6 +182,8 @@ def main(venv_python: str) -> None:
             check("Hors ligne" in banner and "Données du 31 octobre 2026" in banner and "copie du 1 novembre 2026" in banner,
                   f"offline banner: {banner!r}")
             check(len(titles(page, "#results a.title")) > 0, "the list renders offline")
+            check(page.locator("header.site input").count() == 0, "no inline header search")
+            page.locator("[data-open-search]").click()
             page.select_option("select[name=periode]", "30j")
             for (commune, rayon), name in CASES.items():
                 page.select_option("select[name=commune]", commune)

@@ -41,6 +41,7 @@ globalThis.document = {
   get title() { return this._title; },
 };
 globalThis.location = { origin: "https://site.test", pathname: "/evenements/x-2026-11-05/", search: "" };
+globalThis.addEventListener = () => {};
 const registered = [];
 Object.defineProperty(globalThis, "navigator", {
   value: { serviceWorker: { register: async (...a) => registered.push(a) } }, configurable: true,
